@@ -35,8 +35,8 @@ export interface QueueOptions {
   esperaMin?: (e: AlarmEvent) => number;
 }
 
-// Eventos que exigem atendimento de um operador. Arme/desarme, teste e supervisão só
-// ficam no histórico; restaurações encerram a ocorrência aberta da mesma conta e zona.
+// Eventos que exigem atendimento de um operador. Teste e supervisão só ficam no histórico;
+// restauração e arme/desarme são anotados na ocorrência aberta da conta, que o operador conclui.
 function exigeAtendimento(e: AlarmEvent): boolean {
   if (e.qualifier === 'restore') return false;
   return e.category === 'alarm' || e.category === 'fault' || e.category === 'other';
@@ -109,7 +109,12 @@ export class IncidentQueue {
 
   // Recebe um evento. Devolve a ocorrência afetada, se houver.
   handleEvent(e: AlarmEvent): Ocorrencia | undefined {
-    if (e.qualifier === 'restore') return this.noteRestore(e);
+    // Arme/desarme não abre ocorrência, mas o operador precisa ver quem armou ou desarmou durante um atendimento.
+    if (e.category === 'openclose') {
+      const quem = !e.zoneOrUser ? '' : e.description.endsWith('pelo usuário') ? ` ${e.zoneOrUser}` : ` (usuário ${e.zoneOrUser})`;
+      return this.anotar(e, e.description + quem);
+    }
+    if (e.qualifier === 'restore') return this.anotar(e, `Restauração recebida: ${e.description.replace(/^Restauração: /, '')}`);
     if (!exigeAtendimento(e)) return undefined;
 
     // Eventos repetidos da mesma conta entram na ocorrência aberta em vez de criar outra.
@@ -156,11 +161,12 @@ export class IncidentQueue {
     if (o.eventos.length > MAX_EVENTOS) o.eventos.splice(1, 1);
   }
 
-  private noteRestore(e: AlarmEvent): Ocorrencia | undefined {
+  // Anexa à ocorrência aberta da conta, se houver, sem mudar a situação: quem conclui é sempre o operador.
+  private anotar(e: AlarmEvent, descricao: string): Ocorrencia | undefined {
     const open = this.incidents.find((i) => i.conta === e.account && i.situacao !== 'encerrada');
     if (!open) return undefined;
     this.anexar(open, e);
-    open.acoes.push({ em: this.now(), descricao: `Restauração recebida: ${e.description}` });
+    open.acoes.push({ em: this.now(), descricao });
     this.changed(open);
     return open;
   }

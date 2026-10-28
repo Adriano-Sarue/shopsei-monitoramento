@@ -33,8 +33,8 @@ const CONTACT_ID_CODES: Record<string, CodeInfo> = {
   '360': { description: 'Restauração na supervisão da central', category: 'supervision', priority: 5 },
   '380': { description: 'Falha de sensor', category: 'fault', priority: 3 },
   '384': { description: 'Bateria baixa em sensor sem fio', category: 'fault', priority: 4 },
-  '400': { description: 'Abertura/fechamento', category: 'openclose', priority: 5 },
-  '401': { description: 'Abertura/fechamento por usuário', category: 'openclose', priority: 5 },
+  '400': { description: 'Arme/desarme', category: 'openclose', priority: 5 },
+  '401': { description: 'Arme/desarme pelo usuário', category: 'openclose', priority: 5 },
   '403': { description: 'Arme/desarme automático', category: 'openclose', priority: 5 },
   '407': { description: 'Arme/desarme remoto', category: 'openclose', priority: 5 },
   '408': { description: 'Arme rápido', category: 'openclose', priority: 5 },
@@ -54,7 +54,7 @@ function fallbackByRange(code: string): CodeInfo {
     case '3':
       return { description: `Problema ${code}`, category: 'fault', priority: 3 };
     case '4':
-      return { description: `Abertura/fechamento ${code}`, category: 'openclose', priority: 5 };
+      return { description: `Arme/desarme ${code}`, category: 'openclose', priority: 5 };
     case '6':
       return { description: `Teste ${code}`, category: 'test', priority: 6 };
     default:
@@ -86,7 +86,10 @@ export function parseContactId(text: string): ContactIdEvent {
   const qualifier = QUALIFIERS[q] ?? 'new';
   let description = info.description;
   if (info.category === 'openclose') {
-    description = `${qualifier === 'new' ? 'Desarme' : 'Arme'}: ${info.description}`;
+    // Contact ID: E (novo) é abertura = desarme; R (restauração) é fechamento = arme.
+    const acao = qualifier === 'new' ? 'Desarme' : 'Arme';
+    if (info.description.startsWith('Arme/desarme')) description = acao + info.description.slice('Arme/desarme'.length);
+    else if (!info.description.startsWith(acao)) description = `${acao}: ${info.description}`;
   } else if (qualifier === 'restore') {
     description = `Restauração: ${info.description}`;
   }
