@@ -131,6 +131,7 @@ const PAGINAS: Record<string, { arquivo: string; tipo: string; publica?: boolean
   '/logo.jpg': { arquivo: 'logo.jpg', tipo: 'image/jpeg', publica: true },
   '/logo-icone.png': { arquivo: 'logo-icone.png', tipo: 'image/png', publica: true },
   '/favicon.png': { arquivo: 'favicon.png', tipo: 'image/png', publica: true },
+  '/fontes/inter.woff2': { arquivo: 'fontes/inter.woff2', tipo: 'font/woff2', publica: true },
 };
 
 function usuarioPublico(u: Usuario) {
@@ -435,8 +436,9 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         if (q && pagina.plataforma && q.empresaId !== null) return ir('/');
         if (q && pagina.admin && q.papel !== 'admin') return ir(q.empresaId === null ? '/empresas.html' : '/');
         const caminho = join(opts.publicDir, pagina.arquivo);
-        const conteudo = pagina.tipo.startsWith('image/') ? await readFile(caminho) : await readFile(caminho, 'utf8');
-        const cache: Record<string, string> = pagina.tipo.startsWith('image/') ? { 'cache-control': 'public, max-age=86400' } : pagina.publica ? {} : { 'cache-control': 'no-store' };
+        const binario = pagina.tipo.startsWith('image/') || pagina.tipo.startsWith('font/');
+        const conteudo = binario ? await readFile(caminho) : await readFile(caminho, 'utf8');
+        const cache: Record<string, string> = binario ? { 'cache-control': 'public, max-age=86400' } : pagina.publica ? {} : { 'cache-control': 'no-store' };
         return send(res, 200, conteudo, pagina.tipo, cache);
       }
       if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: true });
