@@ -18,6 +18,14 @@ Sistema próprio de monitoramento de alarmes da Shop Sei. Esta primeira parte é
   em `data/eventos-AAAA-MM-DD.jsonl`.
 - **Simulador de central** para testar sem mexer nos clientes reais.
 
+## Feed Sur-Gard (Active Net 3)
+
+Na Shop Sei os eventos chegam ao Moni pelo Active Net 3, que os repassa por porta
+serial no protocolo Sur-Gard. Definindo `SURGARD_TCP_PORTA`, a receptora também ouve esse
+feed por TCP (uma ponte no PC da empresa leva a porta serial até aqui) e responde
+ACK/NAK por mensagem. O decodificador usa o formato público e é **provisório** até
+validarmos com uma captura real do feed.
+
 ## Pendente
 
 - Confirmar o formato que as centrais **JFL** usam ao reportar por IP. Se for
@@ -45,7 +53,7 @@ npm run simular -- --conta 1234 --protocolo NULL                       # supervi
 ```
 
 Variáveis de ambiente: `RECEPTORA_TCP_PORTA`, `RECEPTORA_UDP_PORTA` (padrão 9000),
-`CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
+`SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
 
 Com Docker:
 
