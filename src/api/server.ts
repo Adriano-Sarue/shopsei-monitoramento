@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
-import { planoPara, PREFIXO_PASSO, tituloOcorrencia } from '../incidents/planos.js';
+import { eventoPrincipal, planoPara, PREFIXO_PASSO, tituloOcorrencia } from '../incidents/planos.js';
 import type { Ocorrencia } from '../incidents/queue.js';
 import type { Central } from '../central.js';
 import { conferirSenha, hashSenha, SENHA_MINIMA } from '../auth/senha.js';
@@ -66,6 +66,8 @@ function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false) {
       em: e.receivedAt, codigo: e.code, descricao: e.description, zona: e.zoneOrUser ?? null, protocolo: e.protocol,
     })),
     resumo: tituloOcorrencia(o),
+    // Disparo (ou falha tão urgente quanto, como jammer): a tela entra em alarme com sirene.
+    alarme: ((p) => p.category === 'alarm' || p.priority <= 2)(eventoPrincipal(o)),
     plano: planoPara(o, cadastrada).map((passo) => ({ passo, feito: feitos.has(passo) })),
     acoes: o.acoes.map((a) => ({ em: a.em.toISOString(), operador: a.operador ?? null, descricao: a.descricao })),
   };
@@ -126,6 +128,9 @@ const PAGINAS: Record<string, { arquivo: string; tipo: string; publica?: boolean
   '/login.html': { arquivo: 'login.html', tipo: 'text/html', publica: true },
   '/app.css': { arquivo: 'app.css', tipo: 'text/css', publica: true },
   '/app.js': { arquivo: 'app.js', tipo: 'application/javascript', publica: true },
+  '/logo.jpg': { arquivo: 'logo.jpg', tipo: 'image/jpeg', publica: true },
+  '/logo-icone.png': { arquivo: 'logo-icone.png', tipo: 'image/png', publica: true },
+  '/favicon.png': { arquivo: 'favicon.png', tipo: 'image/png', publica: true },
 };
 
 function usuarioPublico(u: Usuario) {
@@ -429,8 +434,10 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         if (q && pagina.empresa && q.empresaId === null) return ir('/empresas.html');
         if (q && pagina.plataforma && q.empresaId !== null) return ir('/');
         if (q && pagina.admin && q.papel !== 'admin') return ir(q.empresaId === null ? '/empresas.html' : '/');
-        const html = await readFile(join(opts.publicDir, pagina.arquivo), 'utf8');
-        return send(res, 200, html, pagina.tipo, pagina.publica ? {} : { 'cache-control': 'no-store' });
+        const caminho = join(opts.publicDir, pagina.arquivo);
+        const conteudo = pagina.tipo.startsWith('image/') ? await readFile(caminho) : await readFile(caminho, 'utf8');
+        const cache: Record<string, string> = pagina.tipo.startsWith('image/') ? { 'cache-control': 'public, max-age=86400' } : pagina.publica ? {} : { 'cache-control': 'no-store' };
+        return send(res, 200, conteudo, pagina.tipo, cache);
       }
       if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: true });
       // Eventos que os equipamentos dos condomínios enviam (sem login: o token no endereço identifica o equipamento).

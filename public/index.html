@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fila · Shop Sei Monitoramento</title>
+<link rel="icon" href="/favicon.png">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -13,7 +14,7 @@
   <div class="cartao numero"><b id="n-em_atendimento">0</b><span class="mute">Em atendimento</span></div>
   <div class="espaco"></div>
   <span id="feed" class="feed" title="Quando chegou o último evento de qualquer central. Se ficar vermelho, o feed pode ter parado.">Aguardando eventos…</span>
-  <label class="mute" style="margin:0;display:flex;gap:6px;align-items:center"><input id="som" type="checkbox" style="width:auto"> Som de aviso</label>
+  <label class="mute" style="margin:0;display:flex;gap:6px;align-items:center"><input id="som" type="checkbox" style="width:auto"> Bip de avisos</label>
   <div class="disp"><span class="bolinha" id="bolinha"></span><span id="estado" class="mute">Indisponível</span><button id="disp" class="principal">Ficar disponível</button></div>
 </div>
 <div id="erro" class="msg erro" style="padding:6px 20px 0"></div>
@@ -61,7 +62,7 @@ async function anotar(o, descricao) {
 
 function card(o, nova) {
   const p = Math.min(o.prioridade, 4);
-  const c = el('div', 'cartao ocorrencia p' + p + (nova ? ' nova' : ''));
+  const c = el('div', 'cartao ocorrencia p' + p + (nova ? ' nova' : '') + (o.alarme && o.situacao !== 'pendente' ? ' disparo' : ''));
   const l1 = el('div', 'linha');
   l1.append(el('span', 'titulo', 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '')), el('span', 'selo p' + p, NIVEIS[p]));
   c.append(l1);
@@ -162,7 +163,8 @@ async function load() {
     const ids = new Set(lista.map((o) => o.id));
     const novas = conhecidas ? lista.filter((o) => !conhecidas.has(o.id)) : [];
     conhecidas = ids;
-    if (novas.some((o) => o.prioridade <= 2) || (novas.length && disponivel && novas.some((o) => o.operador === eu.nome))) bip();
+    if (novas.some((o) => o.prioridade <= 2 && !o.alarme) || (novas.length && disponivel && novas.some((o) => o.operador === eu.nome && !o.alarme))) bip();
+    atualizarAlarme(lista, eu, (o) => anotar(o, 'Ciente do disparo, iniciando atendimento'), disponivel || !eu.nome ? null : () => $('disp').click());
     const foco = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.ocorrencia : undefined;
     for (const id of ['aguardando', 'pendente', 'em_atendimento']) {
       const col = lista.filter((o) => o.situacao === id).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));
@@ -181,6 +183,8 @@ function mostrarEstado() {
 }
 
 $('disp').onclick = async () => {
+  // Pede para avisar no sistema quando a aba estiver em segundo plano (disparo com a Fila escondida).
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   try { await api('/api/operadores', { method: 'POST', body: JSON.stringify({ disponivel: !disponivel }) }); disponivel = !disponivel; mostrarEstado(); load(); } catch (e) { aviso(e.message); }
 };
 $('cancelar').onclick = () => $('dlg-concluir').close();
