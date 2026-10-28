@@ -54,6 +54,14 @@ function bip() {
 }
 
 function aviso(texto) { $('erro').textContent = texto; }
+
+// "Ciente" no disparo: já abre a primeira câmera do cliente numa aba nova (precisa ser no clique, senão o navegador
+// bloqueia a janela); as outras ficam nos botões do cartão.
+function cienteDoDisparo(o) {
+  const cam = o.cliente && o.cliente.cameras && o.cliente.cameras[0];
+  if (cam) window.open(cam.url, '_blank', 'noopener');
+  return anotar(o, 'Ciente do disparo, iniciando atendimento' + (cam ? ' (câmera ' + cam.nome + ' aberta)' : ''));
+}
 const rascunhos = {};
 
 async function anotar(o, descricao) {
@@ -164,7 +172,7 @@ async function load() {
     const novas = conhecidas ? lista.filter((o) => !conhecidas.has(o.id)) : [];
     conhecidas = ids;
     if (novas.some((o) => o.prioridade <= 2 && !o.alarme) || (novas.length && disponivel && novas.some((o) => o.operador === eu.nome && !o.alarme))) bip();
-    atualizarAlarme(lista, eu, (o) => anotar(o, 'Ciente do disparo, iniciando atendimento'), disponivel || !eu.nome ? null : () => $('disp').click());
+    atualizarAlarme(lista, eu, cienteDoDisparo, disponivel || !eu.nome ? null : () => $('disp').click());
     const foco = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.ocorrencia : undefined;
     for (const id of ['aguardando', 'pendente', 'em_atendimento']) {
       const col = lista.filter((o) => o.situacao === id).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));
