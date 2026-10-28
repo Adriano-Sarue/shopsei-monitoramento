@@ -52,6 +52,31 @@ test('arme/desarme e teste não geram ocorrência; restauração só anota', () 
   assert.match(q.get(a.id).acoes[0]!.descricao, /Restauração/);
 });
 
+test('arme e desarme durante uma ocorrência aberta são anotados, sem concluir nem contar como restauração', () => {
+  const q = new IncidentQueue();
+  const a = q.handleEvent(ev('1234', '1130 01 003'))!;
+  q.handleEvent(ev('1234', '1401 01 005'));
+  q.handleEvent(ev('1234', '3401 01 005'));
+  const o = q.get(a.id);
+  assert.equal(o.situacao, 'aguardando');
+  assert.deepEqual(o.acoes.map((x) => x.descricao), ['Desarme pelo usuário 005', 'Arme pelo usuário 005']);
+  assert.equal(o.eventos.length, 3);
+});
+
+test('Contact ID: E401 é desarme e R401 é arme', () => {
+  assert.equal(parseContactId('1401 01 005').description, 'Desarme pelo usuário');
+  assert.equal(parseContactId('3401 01 005').description, 'Arme pelo usuário');
+  assert.equal(parseContactId('3408 01 000').description, 'Arme rápido');
+  assert.equal(parseContactId('1407 01 000').description, 'Desarme remoto');
+});
+
+test('restauração não repete a palavra no registro', () => {
+  const q = new IncidentQueue();
+  const a = q.handleEvent(ev('1234', '1301 00 000'))!;
+  q.handleEvent(ev('1234', '3301 00 000'));
+  assert.equal(q.get(a.id).acoes[0]!.descricao, 'Restauração recebida: Falha AC');
+});
+
 test('conta não cadastrada vira ocorrência marcada', () => {
   const q = new IncidentQueue({ contaCadastrada: (c) => c === '1234' });
   assert.equal(q.handleEvent(ev('94', '1130 01 003'))!.contaCadastrada, false);

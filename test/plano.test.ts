@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { eventoInterno, planoPara } from '../src/incidents/planos.js';
+import { eventoInterno, planoPara, tituloOcorrencia } from '../src/incidents/planos.js';
 import { IncidentQueue } from '../src/incidents/queue.js';
 import { SupervisaoTeste } from '../src/incidents/supervisao.js';
 import { parseContactId } from '../src/protocols/contactId.js';
@@ -79,4 +79,42 @@ test('falta de teste periódico: avisa uma vez por atraso e volta a vigiar quand
   s.registrar('0014', agora);
   agora = new Date('2026-10-28T07:00:02Z');
   assert.deepEqual(s.atrasadas(contas).map((x) => x.conta), ['0014']);
+});
+
+test('bateria de sensor, tampa aberta e mudança de programação viram ocorrência com o plano certo', () => {
+  const q = new IncidentQueue();
+  const bateria = q.handleEvent(ev('0001', '1384 01 007'))!;
+  assert.equal(bateria.eventos[0]!.description, 'Bateria baixa em sensor sem fio');
+  assert.match(planoPara(bateria, true).join('|'), /pilha do sensor/);
+
+  const tampa = q.handleEvent(ev('0002', '1383 01 012'))!;
+  assert.equal(tampa.eventos[0]!.description, 'Tamper de sensor (tampa aberta)');
+  assert.match(planoPara(tampa, true)[0]!, /sabotagem/);
+  assert.match(planoPara(q.handleEvent(ev('0003', '1137 01 004'))!, true)[0]!, /sabotagem/);
+
+  for (const [conta, cid, texto] of [['0004', '1306 00 000', 'Programação da central alterada'], ['0005', '1627 00 000', 'Entrada no modo de programação'], ['0006', '1412 00 000', 'Programação remota da central']]) {
+    const o = q.handleEvent(ev(conta!, cid!))!;
+    assert.equal(o.eventos[0]!.description, texto);
+    assert.match(planoPara(o, true)[0]!, /técnico/);
+  }
+});
+
+test('códigos 41x, 42x e 46x não são tratados como arme/desarme', () => {
+  for (const cid of ['1413 00 000', '1421 01 003', '1461 01 000', '1419 00 000']) {
+    assert.notEqual(parseContactId(cid).category, 'openclose', cid);
+  }
+  assert.equal(parseContactId('3441 01 005').description, 'Arme em modo parcial (stay)');
+  assert.equal(parseContactId('1449 01 005').category, 'openclose');
+});
+
+test('título da ocorrência é o evento mais urgente e avisa quando já foi restaurado', () => {
+  const q = new IncidentQueue();
+  const o = q.handleEvent(ev('0010', '1384 01 007'))!;
+  q.handleEvent(ev('0010', '1130 01 003'));
+  q.handleEvent(ev('0010', '3130 01 003'));
+  assert.equal(tituloOcorrencia(q.get(o.id)), 'Disparo de alarme (já restaurado)');
+  const t = q.handleEvent(ev('0011', '1383 01 012'))!;
+  assert.equal(tituloOcorrencia(t), 'Tamper de sensor (tampa aberta)');
+  q.handleEvent(ev('0011', '3383 01 099'));
+  assert.equal(tituloOcorrencia(q.get(t.id)), 'Tamper de sensor (tampa aberta)');
 });

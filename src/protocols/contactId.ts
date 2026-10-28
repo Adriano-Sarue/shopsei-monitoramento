@@ -20,29 +20,50 @@ const CONTACT_ID_CODES: Record<string, CodeInfo> = {
   '133': { description: 'Disparo de zona 24h', category: 'alarm', priority: 2 },
   '134': { description: 'Disparo de entrada/saída', category: 'alarm', priority: 2 },
   '137': { description: 'Violação (tamper)', category: 'alarm', priority: 2 },
-  '144': { description: 'Tamper de sensor', category: 'fault', priority: 3 },
+  '144': { description: 'Tamper de sensor (tampa aberta)', category: 'fault', priority: 3 },
+  '145': { description: 'Tamper de módulo de expansão', category: 'fault', priority: 3 },
   '250': { description: 'Falha de keep alive', category: 'fault', priority: 3 },
   '301': { description: 'Falha AC', category: 'fault', priority: 3 },
   '302': { description: 'Bateria baixa', category: 'fault', priority: 3 },
   '305': { description: 'Reinício da central', category: 'fault', priority: 4 },
+  '306': { description: 'Programação da central alterada', category: 'fault', priority: 4 },
+  '307': { description: 'Falha no autoteste da central', category: 'fault', priority: 3 },
+  '309': { description: 'Falha no teste da bateria', category: 'fault', priority: 3 },
+  '311': { description: 'Bateria descarregada ou ausente', category: 'fault', priority: 3 },
   '313': { description: 'Falha na restauração da bateria', category: 'fault', priority: 3 },
   '321': { description: 'Falha na sirene', category: 'fault', priority: 3 },
+  '333': { description: 'Falha em módulo de expansão', category: 'fault', priority: 3 },
+  '341': { description: 'Tamper de módulo expansor', category: 'fault', priority: 3 },
+  '342': { description: 'Falha AC em módulo expansor', category: 'fault', priority: 3 },
+  '344': { description: 'Interferência no receptor sem fio (jammer)', category: 'fault', priority: 2 },
   '350': { description: 'Falha de comunicação', category: 'fault', priority: 3 },
   '351': { description: 'Falha na linha telefônica', category: 'fault', priority: 3 },
   '354': { description: 'Falha ao comunicar evento', category: 'fault', priority: 3 },
   '360': { description: 'Restauração na supervisão da central', category: 'supervision', priority: 5 },
+  '373': { description: 'Falha no circuito de incêndio', category: 'fault', priority: 3 },
   '380': { description: 'Falha de sensor', category: 'fault', priority: 3 },
+  '381': { description: 'Perda de supervisão de sensor sem fio', category: 'fault', priority: 3 },
+  '383': { description: 'Tamper de sensor (tampa aberta)', category: 'fault', priority: 3 },
   '384': { description: 'Bateria baixa em sensor sem fio', category: 'fault', priority: 4 },
-  '400': { description: 'Abertura/fechamento', category: 'openclose', priority: 5 },
-  '401': { description: 'Abertura/fechamento por usuário', category: 'openclose', priority: 5 },
+  '400': { description: 'Arme/desarme', category: 'openclose', priority: 5 },
+  '401': { description: 'Arme/desarme pelo usuário', category: 'openclose', priority: 5 },
   '403': { description: 'Arme/desarme automático', category: 'openclose', priority: 5 },
   '407': { description: 'Arme/desarme remoto', category: 'openclose', priority: 5 },
   '408': { description: 'Arme rápido', category: 'openclose', priority: 5 },
   '409': { description: 'Arme/desarme por chave', category: 'openclose', priority: 5 },
+  '411': { description: 'Pedido de retorno (callback)', category: 'other', priority: 5 },
+  '412': { description: 'Programação remota da central', category: 'fault', priority: 4 },
+  '413': { description: 'Tentativa de acesso remoto sem sucesso', category: 'fault', priority: 3 },
+  '421': { description: 'Acesso negado', category: 'other', priority: 4 },
+  '441': { description: 'Arme/desarme em modo parcial (stay)', category: 'openclose', priority: 5 },
   '456': { description: 'Arme parcial', category: 'openclose', priority: 5 },
+  '461': { description: 'Senha errada digitada', category: 'other', priority: 4 },
   '570': { description: 'Zona anulada (bypass)', category: 'other', priority: 4 },
   '601': { description: 'Teste manual', category: 'test', priority: 6 },
   '602': { description: 'Auto teste', category: 'test', priority: 6 },
+  '625': { description: 'Data e hora da central alteradas', category: 'fault', priority: 4 },
+  '627': { description: 'Entrada no modo de programação', category: 'fault', priority: 4 },
+  '628': { description: 'Saída do modo de programação', category: 'fault', priority: 4 },
 };
 
 function fallbackByRange(code: string): CodeInfo {
@@ -54,7 +75,9 @@ function fallbackByRange(code: string): CodeInfo {
     case '3':
       return { description: `Problema ${code}`, category: 'fault', priority: 3 };
     case '4':
-      return { description: `Abertura/fechamento ${code}`, category: 'openclose', priority: 5 };
+      // Só 40x, 44x e 45x são arme/desarme; 41x (acesso remoto), 42x (acesso) e 46x (senha) pedem atenção.
+      if ('045'.includes(code[1]!)) return { description: `Arme/desarme ${code}`, category: 'openclose', priority: 5 };
+      return { description: `Evento ${code}`, category: 'other', priority: 4 };
     case '6':
       return { description: `Teste ${code}`, category: 'test', priority: 6 };
     default:
@@ -86,7 +109,10 @@ export function parseContactId(text: string): ContactIdEvent {
   const qualifier = QUALIFIERS[q] ?? 'new';
   let description = info.description;
   if (info.category === 'openclose') {
-    description = `${qualifier === 'new' ? 'Desarme' : 'Arme'}: ${info.description}`;
+    // Contact ID: E (novo) é abertura = desarme; R (restauração) é fechamento = arme.
+    const acao = qualifier === 'new' ? 'Desarme' : 'Arme';
+    if (info.description.startsWith('Arme/desarme')) description = acao + info.description.slice('Arme/desarme'.length);
+    else if (!info.description.startsWith(acao)) description = `${acao}: ${info.description}`;
   } else if (qualifier === 'restore') {
     description = `Restauração: ${info.description}`;
   }
