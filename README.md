@@ -18,6 +18,16 @@ Sistema próprio de monitoramento de alarmes da Shop Sei. Esta primeira parte é
   em `data/eventos-AAAA-MM-DD.jsonl`.
 - **Simulador de central** para testar sem mexer nos clientes reais.
 
+## Console web do operador
+
+Definindo `CONSOLE_TOKEN` (e opcionalmente `CONSOLE_PORTA`, padrão 8090), sobe uma
+página em `http://servidor:8090/` com as colunas Aguardando, Pendente e Em atendimento.
+O operador informa o token e o nome, fica disponível, e a receptora distribui as
+ocorrências (mais urgente primeiro). Ele conclui (com motivo e texto) ou adia 30 minutos.
+O token é compartilhado e o console ainda não tem login por usuário: **ponha atrás de
+HTTPS/VPN antes de expor na internet**. A fila ainda é em memória (reiniciar zera a tela;
+os eventos continuam gravados em `data/`).
+
 ## Feed Sur-Gard (Active Net 3)
 
 Na Shop Sei os eventos chegam ao Moni pelo Active Net 3, que os repassa por porta

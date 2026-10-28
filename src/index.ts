@@ -1,3 +1,5 @@
+import { createApi, listen } from './api/server.js';
+import { IncidentQueue } from './incidents/queue.js';
 import { AccountRegistry } from './receiver/accounts.js';
 import { Receiver, type RawFrame } from './receiver/server.js';
 import { SurgardServer } from './receiver/surgardServer.js';
@@ -7,6 +9,7 @@ import type { AlarmEvent } from './protocols/types.js';
 const tcpPort = Number(process.env.RECEPTORA_TCP_PORTA ?? 9000);
 const udpPort = Number(process.env.RECEPTORA_UDP_PORTA ?? 9000);
 const accounts = AccountRegistry.fromFile(process.env.CONTAS_ARQUIVO ?? 'config/accounts.json');
+const queue = new IncidentQueue({ contaCadastrada: (conta) => accounts.get(conta) !== undefined });
 const store = new JsonlStore(process.env.DADOS_DIR ?? 'data');
 
 const receiver = new Receiver({ tcpPort, udpPort, keyFor: accounts.keyFor });
@@ -19,6 +22,7 @@ receiver.on('raw', (raw: RawFrame) => {
 
 function onEvent(event: AlarmEvent): void {
   store.appendEvent(event).catch((err) => console.error('Falha ao gravar evento:', err));
+  queue.handleEvent(event);
   if (event.category === 'supervision') return;
   const name = accounts.get(event.account)?.name ?? 'conta não cadastrada';
   const zone = event.zoneOrUser ? ` zona/usuário ${event.zoneOrUser}` : '';
@@ -42,8 +46,18 @@ if (process.env.SURGARD_TCP_PORTA) {
   console.log(`Feed Sur-Gard ouvindo TCP ${await surgard.start()}`);
 }
 
+// Console web do operador. Desligado se CONSOLE_TOKEN não for definido.
+let api: ReturnType<typeof createApi> | undefined;
+if (process.env.CONSOLE_TOKEN) {
+  api = createApi(queue, { token: process.env.CONSOLE_TOKEN, publicDir: 'public', port: 0 });
+  console.log(`Console web ouvindo na porta ${await listen(api, Number(process.env.CONSOLE_PORTA ?? 8090))}`);
+} else {
+  console.log('Console web desligado (defina CONSOLE_TOKEN para ligar)');
+}
+setInterval(() => queue.reativarVencidas(), 30_000).unref();
+
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    Promise.all([receiver.stop(), surgard?.stop()]).finally(() => process.exit(0));
+    Promise.all([receiver.stop(), surgard?.stop(), api ? new Promise<void>((r) => api!.close(() => r())) : undefined]).finally(() => process.exit(0));
   });
 }
