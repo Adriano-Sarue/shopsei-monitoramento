@@ -25,6 +25,11 @@
       <label>Palavra-chave <input id="palavraChave" autocomplete="off"></label>
       <label>Contra-senha <input id="contraSenha" autocomplete="off"></label>
     </div>
+    <label>Instruções para o operador (valem mais que o plano padrão) <textarea id="instrucoes" rows="2" placeholder="Ex.: loja fecha às 22h; em disparo à noite, acionar o vigia da rua antes da polícia"></textarea></label>
+    <label>Falta de teste periódico <select id="intervaloTesteHoras">
+      <option value="">Não supervisionar</option><option value="1">Sem sinal por 1 hora</option><option value="6">Sem sinal por 6 horas</option>
+      <option value="12">Sem sinal por 12 horas</option><option value="24">Sem sinal por 24 horas</option><option value="48">Sem sinal por 48 horas</option>
+    </select></label>
     <fieldset><legend>Providências (ordem de ligação)</legend>
       <div class="grade"><label><input id="c1n" placeholder="Nome 1"></label><label><input id="c1t" placeholder="Telefone 1"></label>
       <label><input id="c2n" placeholder="Nome 2"></label><label><input id="c2t" placeholder="Telefone 2"></label>
@@ -48,13 +53,13 @@
 <script src="/app.js"></script>
 <script>
 let editando = null, clientes = [];
-const CAMPOS = ['nome', 'contas', 'endereco', 'tipo', 'observacoes', 'palavraChave', 'contraSenha', 'c1n', 'c1t', 'c2n', 'c2t', 'c3n', 'c3t', 'k1n', 'k1m', 'k1u', 'k2n', 'k2m', 'k2u', 'k3n', 'k3m', 'k3u'];
+const CAMPOS = ['instrucoes', 'intervaloTesteHoras', 'nome', 'contas', 'endereco', 'tipo', 'observacoes', 'palavraChave', 'contraSenha', 'c1n', 'c1t', 'c2n', 'c2t', 'c3n', 'c3t', 'k1n', 'k1m', 'k1u', 'k2n', 'k2m', 'k2u', 'k3n', 'k3m', 'k3u'];
 
 function limpar() { editando = null; $('titulo').textContent = 'Novo cliente'; for (const id of CAMPOS) $(id).value = ''; }
 function editar(c) {
   editando = c.id; $('titulo').textContent = 'Editar ' + c.nome;
   $('nome').value = c.nome; $('contas').value = c.contas.join(', '); $('endereco').value = c.endereco || ''; $('tipo').value = c.tipo || '';
-  $('observacoes').value = c.observacoes || ''; $('palavraChave').value = c.palavraChave || ''; $('contraSenha').value = c.contraSenha || '';
+  $('observacoes').value = c.observacoes || ''; $('instrucoes').value = c.instrucoes || ''; $('intervaloTesteHoras').value = c.intervaloTesteHoras ? String(c.intervaloTesteHoras) : ''; $('palavraChave').value = c.palavraChave || ''; $('contraSenha').value = c.contraSenha || '';
   [1, 2, 3].forEach((n) => { const ct = c.contatos[n - 1]; $('c' + n + 'n').value = ct ? ct.nome : ''; $('c' + n + 't').value = ct ? ct.telefone || '' : ''; });
   [1, 2, 3].forEach((n) => { const k = (c.cameras || [])[n - 1]; $('k' + n + 'n').value = k ? k.nome : ''; $('k' + n + 'm').value = k ? k.marca || '' : ''; $('k' + n + 'u').value = k ? k.url : ''; });
   window.scrollTo({ top: 0, behavior: 'smooth' }); $('nome').focus();
@@ -77,7 +82,7 @@ $('form').onsubmit = async (ev) => {
   ev.preventDefault();
   const contatos = [1, 2, 3].map((n) => ({ nome: $('c' + n + 'n').value, telefone: $('c' + n + 't').value, ordem: n })).filter((c) => c.nome.trim());
   const cameras = [1, 2, 3].map((n) => ({ nome: $('k' + n + 'n').value, marca: $('k' + n + 'm').value, url: $('k' + n + 'u').value, ordem: n })).filter((k) => k.nome.trim() || k.url.trim());
-  const body = { nome: $('nome').value, contas: $('contas').value.split(',').map((s) => s.trim()).filter(Boolean), endereco: $('endereco').value, tipo: $('tipo').value, observacoes: $('observacoes').value, palavraChave: $('palavraChave').value, contraSenha: $('contraSenha').value, contatos, cameras };
+  const body = { nome: $('nome').value, contas: $('contas').value.split(',').map((s) => s.trim()).filter(Boolean), endereco: $('endereco').value, tipo: $('tipo').value, observacoes: $('observacoes').value, palavraChave: $('palavraChave').value, contraSenha: $('contraSenha').value, instrucoes: $('instrucoes').value, intervaloTesteHoras: $('intervaloTesteHoras').value || null, contatos, cameras };
   try {
     await api(editando ? '/api/clientes/' + editando : '/api/clientes', { method: editando ? 'PUT' : 'POST', body: JSON.stringify(body) });
     toast('Cliente salvo'); mensagem('msg', ''); limpar(); carregar();

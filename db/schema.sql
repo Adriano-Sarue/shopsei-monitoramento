@@ -82,3 +82,7 @@ CREATE TABLE IF NOT EXISTS cameras (
   ordem       INT NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS cameras_cliente_idx ON cameras (cliente_id, ordem);
+
+-- Colunas acrescentadas depois da primeira versão (ADD COLUMN IF NOT EXISTS mantém o esquema idempotente).
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS instrucoes TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS intervalo_teste_horas INT CHECK (intervalo_teste_horas BETWEEN 1 AND 720);

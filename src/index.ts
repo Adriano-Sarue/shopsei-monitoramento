@@ -2,7 +2,9 @@ import { createApi, listen } from './api/server.js';
 import { randomBytes } from 'node:crypto';
 import { hashSenha } from './auth/senha.js';
 import { Sessoes } from './auth/sessoes.js';
+import { eventoInterno } from './incidents/planos.js';
 import { IncidentQueue } from './incidents/queue.js';
+import { SupervisaoTeste } from './incidents/supervisao.js';
 import { AccountRegistry } from './receiver/accounts.js';
 import { Receiver, type RawFrame } from './receiver/server.js';
 import { SurgardServer } from './receiver/surgardServer.js';
@@ -28,8 +30,11 @@ let gravacao: Promise<unknown> = Promise.resolve();
 function gravar(fn: () => Promise<unknown>): void {
   gravacao = gravacao.then(fn).catch((err) => console.error('Falha ao gravar no banco:', err));
 }
+// Falha de energia costuma voltar sozinha: espera esse tempo em "pendente" antes de ir à fila (0 desliga).
+const esperaEnergiaMin = Number(process.env.FALHA_ENERGIA_ESPERA_MIN ?? 30);
 const queue = new IncidentQueue({
   contaCadastrada: (conta) => clientes.porConta(conta) !== undefined,
+  esperaMin: (e) => (e.code === '301' && e.qualifier !== 'restore' ? esperaEnergiaMin : 0),
   onChange: (o) => gravar(() => repo.salvarOcorrencia(o)),
 });
 queue.restore(await repo.carregarOcorrenciasAbertas());
@@ -44,9 +49,14 @@ receiver.on('raw', (raw: RawFrame) => {
 });
 
 let ultimoEvento: Date | undefined;
+const supervisao = new SupervisaoTeste((conta) => clientes.porConta(conta)?.intervaloTesteHoras);
+supervisao.carregar(await repo.ultimosEventos());
 
 function onEvent(event: AlarmEvent): void {
-  ultimoEvento = new Date();
+  if (event.protocol !== 'INTERNO') {
+    ultimoEvento = new Date();
+    supervisao.registrar(event.account, new Date(event.receivedAt));
+  }
   store.appendEvent(event).catch((err) => console.error('Falha ao gravar evento:', err));
   gravar(() => repo.salvarEvento(event));
   queue.handleEvent(event);
@@ -91,6 +101,10 @@ setInterval(() => {
       console.warn(`Operador ${nome} sem sinal: ocorrências devolvidas à fila`);
       queue.desconectar(nome);
     }
+  }
+  const contas = [...new Set(clientes.todos().flatMap((c) => c.contas))];
+  for (const { conta, desde, horas } of supervisao.atrasadas(contas)) {
+    onEvent(eventoInterno(conta, 'TST', `Falta de teste periódico: nenhum sinal há mais de ${horas} h (desde ${desde.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })})`, new Date()));
   }
   sessoes.limpar();
   queue.podar(60 * 60_000);

@@ -20,6 +20,10 @@ export interface NovoCliente {
   endereco?: string;
   tipo?: string;
   observacoes?: string;
+  // Instruções próprias do cliente para o operador; valem mais que o plano de ação padrão.
+  instrucoes?: string;
+  // Prazo máximo sem nenhum sinal das centrais do cliente antes de abrir "falta de teste periódico".
+  intervaloTesteHoras?: number;
   palavraChave?: string;
   contraSenha?: string;
   contas: string[];
@@ -76,6 +80,8 @@ export interface Repositorio {
   salvarOcorrencia(o: Ocorrencia): Promise<void>;
   carregarOcorrenciasAbertas(): Promise<Ocorrencia[]>;
   listarEncerradas(filtro: FiltroHistorico): Promise<Ocorrencia[]>;
+  // Último evento recebido de cada conta (para retomar a supervisão de teste após reinício).
+  ultimosEventos(): Promise<Map<string, Date>>;
   listarClientes(): Promise<Cliente[]>;
   criarCliente(c: NovoCliente): Promise<Cliente>;
   atualizarCliente(id: number, c: NovoCliente): Promise<Cliente>;
@@ -105,7 +111,10 @@ export function validarCliente(c: NovoCliente): NovoCliente {
       if (!/^https?:\/\/\S+$/i.test(url)) throw new Error(`Link da câmera "${x.nome.trim()}" deve começar com http:// ou https://`);
       return { nome: x.nome.trim(), marca: x.marca?.trim() || undefined, url, ordem: x.ordem || i + 1 };
     });
-  return { ...c, nome, contas, contatos, cameras };
+  const intervalo = c.intervaloTesteHoras === undefined || c.intervaloTesteHoras === null || (c.intervaloTesteHoras as unknown) === '' ? undefined : Number(c.intervaloTesteHoras);
+  if (intervalo !== undefined && !(Number.isInteger(intervalo) && intervalo >= 1 && intervalo <= 720)) throw new Error('Intervalo de teste deve ser de 1 a 720 horas');
+  const instrucoes = c.instrucoes?.trim() || undefined;
+  return { ...c, nome, contas, contatos, cameras, instrucoes, intervaloTesteHoras: intervalo };
 }
 
 // Índice em memória conta -> cliente, para a tela não consultar o banco a cada evento.
@@ -117,6 +126,10 @@ export class ClienteIndex {
   async refresh(): Promise<void> {
     const all = await this.repo.listarClientes();
     this.byConta = new Map(all.filter((c) => c.ativo).flatMap((c) => c.contas.map((conta) => [conta.toUpperCase(), c] as const)));
+  }
+
+  todos(): Cliente[] {
+    return [...new Set(this.byConta.values())];
   }
 
   porConta(conta: string): Cliente | undefined {

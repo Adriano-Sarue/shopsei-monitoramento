@@ -182,6 +182,17 @@ test('câmeras só aparecem a quem atende; estado do feed, histórico, CSV e tro
     const depois = (await (await fetch(`${base}/api/ocorrencias`, { headers: h })).json()) as { id: number; cliente: { cameras: { nome: string; url: string }[] } }[];
     assert.equal(depois[0]!.cliente.cameras[0]!.url, 'https://cam.exemplo/1');
 
+    // Plano de ação e anotações: só quem atende anota; passo feito aparece marcado.
+    const id = depois[0]!.id;
+    const anota = (operador: string, descricao: string) => fetch(`${base}/api/ocorrencias/${id}/acoes`, { method: 'POST', headers: h, body: JSON.stringify({ operador, descricao }) });
+    assert.equal((await anota('Beto', 'x')).status, 400);
+    assert.equal((await anota('Ana', 'x'.repeat(501))).status, 400);
+    const r1 = await (await anota('Ana', 'Passo concluído: Ligar para o local e pedir a palavra-chave')).json() as { plano: { passo: string; feito: boolean }[]; acoes: { descricao: string }[] };
+    assert.equal(r1.plano.find((p) => p.passo === 'Ligar para o local e pedir a palavra-chave')!.feito, true);
+    assert.equal(r1.plano.filter((p) => p.feito).length, 1);
+    const r2 = await (await anota('Ana', 'Ligação para Maria: atendeu')).json() as { acoes: { descricao: string; operador: string }[] };
+    assert.deepEqual(r2.acoes.at(-1), { em: r2.acoes.at(-1)!['em' as never], operador: 'Ana', descricao: 'Ligação para Maria: atendeu' });
+
     assert.equal(((await (await fetch(`${base}/api/estado`, { headers: h })).json()) as { ultimoEventoEm: string | null }).ultimoEventoEm, null);
     ultimo = new Date('2026-10-28T12:00:00Z');
     assert.equal(((await (await fetch(`${base}/api/estado`, { headers: h })).json()) as { ultimoEventoEm: string }).ultimoEventoEm, '2026-10-28T12:00:00.000Z');

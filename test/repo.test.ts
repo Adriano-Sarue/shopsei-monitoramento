@@ -46,6 +46,14 @@ async function contrato(repo: Repositorio): Promise<void> {
   assert.deepEqual(cam.cameras, [{ nome: 'Entrada', marca: 'Hikvision', url: 'https://c.exemplo/1', ordem: 1 }]);
   assert.deepEqual((await repo.atualizarCliente(cam.id, { nome: 'Cam', contas: ['0020'], contatos: [] })).cameras, []);
 
+  await assert.rejects(repo.criarCliente({ nome: 'T', contas: ['0030'], contatos: [], intervaloTesteHoras: 0 }), /Intervalo/);
+  const sup = await repo.criarCliente({ nome: 'T', contas: ['0030'], contatos: [], intervaloTesteHoras: 24, instrucoes: '  Ligar para o vigia  ' });
+  assert.equal(sup.intervaloTesteHoras, 24);
+  assert.equal(sup.instrucoes, 'Ligar para o vigia');
+  const semSup = await repo.atualizarCliente(sup.id, { nome: 'T', contas: ['0030'], contatos: [] });
+  assert.equal(semSup.intervaloTesteHoras, undefined);
+  assert.equal(semSup.instrucoes, undefined);
+
   const atual = await repo.atualizarCliente(criado.id, { nome: 'Farmaformula Centro', contas: ['0016'], contatos: [{ nome: 'João', telefone: '1488888', ordem: 1 }] });
   assert.equal(atual.nome, 'Farmaformula Centro');
   assert.deepEqual(atual.contas, ['0016']);
@@ -68,6 +76,9 @@ async function contrato(repo: Repositorio): Promise<void> {
   q.encerrar(a.id, 'Ana', 'Falha de energia', 'Voltou sozinha');
   for (const o of q.list()) await repo.salvarOcorrencia(o);
   await repo.salvarEvento(ev('0016', '1301 00 000'));
+  await repo.salvarEvento({ ...ev('0016', '1301 00 000'), receivedAt: '2026-10-28T10:00:00.000Z' });
+  await repo.salvarEvento({ ...ev('0016', '1301 00 000'), protocol: 'INTERNO', receivedAt: '2026-10-28T11:00:00.000Z' });
+  assert.equal((await repo.ultimosEventos()).get('0016')?.toISOString(), '2026-10-28T10:00:00.000Z');
 
   const abertas = await repo.carregarOcorrenciasAbertas();
   assert.equal(abertas.length, 1);
