@@ -86,3 +86,56 @@ CREATE INDEX IF NOT EXISTS cameras_cliente_idx ON cameras (cliente_id, ordem);
 -- Colunas acrescentadas depois da primeira versão (ADD COLUMN IF NOT EXISTS mantém o esquema idempotente).
 ALTER TABLE clientes ADD COLUMN IF NOT EXISTS instrucoes TEXT;
 ALTER TABLE clientes ADD COLUMN IF NOT EXISTS intervalo_teste_horas INT CHECK (intervalo_teste_horas BETWEEN 1 AND 720);
+
+-- ===== Multiempresa =====
+-- Cada empresa compradora tem seus clientes, contas, usuários, eventos e ocorrências. Bancos criados antes
+-- disso ganham a empresa 1 e todos os dados existentes passam a ser dela.
+CREATE TABLE IF NOT EXISTS empresas (
+  id          BIGSERIAL PRIMARY KEY,
+  nome        TEXT NOT NULL,
+  ativo       BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO empresas (id, nome) SELECT 1, 'Shop Sei'
+  WHERE NOT EXISTS (SELECT 1 FROM empresas) AND (EXISTS (SELECT 1 FROM clientes) OR EXISTS (SELECT 1 FROM usuarios) OR EXISTS (SELECT 1 FROM ocorrencias));
+SELECT setval(pg_get_serial_sequence('empresas', 'id'), GREATEST((SELECT COALESCE(max(id), 0) FROM empresas), 1), (SELECT count(*) > 0 FROM empresas));
+
+-- Por onde chegam os eventos de cada empresa ("*" = qualquer número). Uma rota é de uma empresa só.
+CREATE TABLE IF NOT EXISTS rotas (
+  empresa_id  BIGINT NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+  canal       TEXT NOT NULL CHECK (canal IN ('surgard', 'dc09')),
+  receptora   TEXT NOT NULL,
+  linha       TEXT NOT NULL,
+  PRIMARY KEY (canal, receptora, linha)
+);
+
+DO $$
+DECLARE t TEXT;
+BEGIN
+  -- empresa_id nas tabelas antigas: entra com 1 para os dados que já existem e depois fica sem padrão,
+  -- para nenhum dado novo cair numa empresa por esquecimento.
+  FOREACH t IN ARRAY ARRAY['clientes', 'usuarios', 'contas', 'ocorrencias', 'eventos'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = t AND column_name = 'empresa_id') THEN
+      IF EXISTS (SELECT 1 FROM empresas WHERE id = 1) THEN
+        EXECUTE format('ALTER TABLE %I ADD COLUMN empresa_id BIGINT REFERENCES empresas(id) DEFAULT 1', t);
+        EXECUTE format('ALTER TABLE %I ALTER COLUMN empresa_id DROP DEFAULT', t);
+      ELSE
+        EXECUTE format('ALTER TABLE %I ADD COLUMN empresa_id BIGINT REFERENCES empresas(id)', t);
+      END IF;
+    END IF;
+  END LOOP;
+  -- Usuário sem empresa só o dono do sistema; eventos sem empresa são os que nenhuma rota reconheceu.
+  ALTER TABLE clientes ALTER COLUMN empresa_id SET NOT NULL;
+  ALTER TABLE contas ALTER COLUMN empresa_id SET NOT NULL;
+  ALTER TABLE ocorrencias ALTER COLUMN empresa_id SET NOT NULL;
+  -- A mesma conta pode existir em empresas diferentes.
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contas_pkey' AND array_length(conkey, 1) = 1) THEN
+    ALTER TABLE contas DROP CONSTRAINT contas_pkey;
+    ALTER TABLE contas ADD PRIMARY KEY (empresa_id, numero);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS clientes_empresa_idx ON clientes (empresa_id, nome);
+CREATE INDEX IF NOT EXISTS usuarios_empresa_idx ON usuarios (empresa_id);
+CREATE INDEX IF NOT EXISTS ocorrencias_empresa_idx ON ocorrencias (empresa_id, situacao, encerrada_em DESC);
+CREATE INDEX IF NOT EXISTS eventos_empresa_idx ON eventos (empresa_id, conta, recebido_em DESC);

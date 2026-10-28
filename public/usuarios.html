@@ -13,7 +13,7 @@
     <h2 id="titulo">Novo usuário</h2>
     <label>Nome <input id="nome" required></label>
     <label>Login <input id="login" required autocapitalize="none" autocomplete="off" placeholder="ex.: maria"></label>
-    <label>Perfil <select id="papel"><option value="operador">Operador (atende a fila)</option><option value="admin">Administrador (também cadastra)</option></select></label>
+    <label id="rot-papel">Perfil <select id="papel"><option value="operador">Operador (atende a fila)</option><option value="admin">Administrador (também cadastra)</option></select></label>
     <label><span id="rot-senha">Senha (mínimo 8 caracteres)</span> <input id="senha" type="password" autocomplete="new-password"></label>
     <div id="msg" class="msg" role="status"></div>
     <div style="display:flex;gap:8px"><button class="marca-btn" type="submit">Salvar</button><button type="button" id="limpar">Novo</button></div>
@@ -38,7 +38,7 @@ async function carregar() {
     const us = await api('/api/usuarios');
     $('lista').replaceChildren(...us.map((u) => {
       const d = el('div', 'cartao item' + (u.ativo ? '' : ' inativo'));
-      const t = el('div'); t.append(el('strong', '', u.nome), el('div', 'mute', u.login + ' · ' + (u.papel === 'admin' ? 'Administrador' : 'Operador') + (u.ativo ? '' : ' · desativado')));
+      const t = el('div'); t.append(el('strong', '', u.nome), el('div', 'mute', u.login + ' · ' + (eu.plataforma ? 'Dono do sistema' : u.papel === 'admin' ? 'Administrador' : 'Operador') + (u.ativo ? '' : ' · desativado')));
       const b = el('div'); b.style.display = 'flex'; b.style.gap = '6px';
       const e = el('button', '', 'Editar'); e.onclick = () => editar(u);
       b.append(e);
@@ -62,7 +62,12 @@ $('form').onsubmit = async (ev) => {
   } catch (e) { mensagem('msg', e.message, 'erro'); }
 };
 $('limpar').onclick = limpar;
-(async () => { eu = await iniciarTopo('usuarios'); limpar(); carregar(); })();
+(async () => {
+  eu = await iniciarTopo('usuarios');
+  // Donos do sistema são sempre administradores da plataforma: não há perfil a escolher.
+  if (eu.plataforma) { $('rot-papel').style.display = 'none'; document.querySelector('h1').textContent = 'Donos do sistema'; }
+  limpar(); carregar();
+})();
 </script>
 </body>
 </html>

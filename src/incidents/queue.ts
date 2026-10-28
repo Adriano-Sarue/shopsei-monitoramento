@@ -4,6 +4,7 @@ export type Situacao = 'aguardando' | 'pendente' | 'em_atendimento' | 'encerrada
 
 export interface Ocorrencia {
   id: number;
+  empresaId: number;
   conta: string;
   contaCadastrada: boolean;
   prioridade: number;
@@ -21,6 +22,9 @@ export interface Ocorrencia {
 }
 
 export interface QueueOptions {
+  // Empresa dona desta fila (cada empresa tem a sua) e gerador de números de ocorrência, comum a todas.
+  empresaId?: number;
+  proximoId?: () => number;
   // Quais contas existem no cadastro. Eventos de outras contas viram ocorrência marcada.
   contaCadastrada?: (conta: string) => boolean;
   now?: () => Date;
@@ -125,7 +129,8 @@ export class IncidentQueue {
       return open;
     }
     const incident: Ocorrencia = {
-      id: this.nextId++,
+      id: this.opts.proximoId ? this.opts.proximoId() : this.nextId++,
+      empresaId: this.opts.empresaId ?? 1,
       conta: e.account,
       contaCadastrada: this.opts.contaCadastrada?.(e.account) ?? true,
       prioridade: e.priority,

@@ -25,6 +25,9 @@ services:
       DATABASE_URL: postgres://shopsei:${BANCO_SENHA}@db:5432/shopsei
       ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
       ADMIN_SENHA: ${ADMIN_SENHA:?defina ADMIN_SENHA no .env}
+      EMPRESA_NOME: ${EMPRESA_NOME:-Shop Sei}
+      PLATAFORMA_LOGIN: ${PLATAFORMA_LOGIN:-plataforma}
+      PLATAFORMA_SENHA: ${PLATAFORMA_SENHA:-}
       SURGARD_TCP_PORTA: ${SURGARD_TCP_PORTA:-}
       CONFIAR_PROXY: "1"
       TZ: America/Sao_Paulo

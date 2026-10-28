@@ -21,4 +21,6 @@ export interface AlarmEvent {
   category: EventCategory;
   priority: number;
   raw: string;
+  // Preenchido pela roteação: empresa dona da central (vazio se nenhuma rota casou).
+  empresaId?: number;
 }

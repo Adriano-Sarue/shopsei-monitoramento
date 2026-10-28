@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createApi, listen } from '../src/api/server.js';
 import { hashSenha } from '../src/auth/senha.js';
-import { IncidentQueue } from '../src/incidents/queue.js';
+import { Central } from '../src/central.js';
 import { parseContactId } from '../src/protocols/contactId.js';
 import { MemoryRepo } from '../src/store/memoryRepo.js';
-import { ClienteIndex } from '../src/store/repositorio.js';
 import type { AlarmEvent } from '../src/protocols/types.js';
 
 function ev(account: string, cid: string): AlarmEvent {
@@ -15,11 +14,19 @@ function ev(account: string, cid: string): AlarmEvent {
   };
 }
 
-test('API exige token, lista ocorrências e conclui como operador', async () => {
-  const queue = new IncidentQueue();
-  const server = createApi(queue, { token: 'segredo', publicDir: 'public', port: 0 });
+// Sobe a API com uma empresa (a Shop Sei) que recebe tudo, como na primeira instalação.
+async function montar(opts: { repo?: MemoryRepo; token?: string; ultimoEvento?: () => Date | undefined } = {}) {
+  const repo = opts.repo ?? new MemoryRepo();
+  const emp = (await repo.listarEmpresas())[0] ?? await repo.criarEmpresa({ nome: 'Shop Sei', rotas: [{ canal: 'dc09', receptora: '*', linha: '*' }] });
+  const central = new Central(repo);
+  await central.iniciar();
+  const server = createApi(central, { token: opts.token, publicDir: 'public', port: 0, repo, ultimoEvento: opts.ultimoEvento });
   const port = await listen(server, 0, '127.0.0.1');
-  const base = `http://127.0.0.1:${port}`;
+  return { repo, emp, central, queue: central.fila(emp.id), server, base: `http://127.0.0.1:${port}` };
+}
+
+test('API exige token, lista ocorrências e conclui como operador', async () => {
+  const { queue, server, base } = await montar({ token: 'segredo' });
   const h = { authorization: 'Bearer segredo', 'content-type': 'application/json' };
   try {
     assert.equal((await fetch(`${base}/api/ocorrencias`)).status, 401);
@@ -46,12 +53,7 @@ test('API exige token, lista ocorrências e conclui como operador', async () => 
 });
 
 test('API de clientes: cria, bloqueia conta repetida e mostra o cliente na ocorrência', async () => {
-  const repo = new MemoryRepo();
-  const clientes = new ClienteIndex(repo);
-  const queue = new IncidentQueue({ contaCadastrada: (c) => clientes.porConta(c) !== undefined });
-  const server = createApi(queue, { token: 'segredo', publicDir: 'public', port: 0, repo, clientes });
-  const port = await listen(server, 0, '127.0.0.1');
-  const base = `http://127.0.0.1:${port}`;
+  const { queue, server, base } = await montar({ token: 'segredo' });
   const h = { authorization: 'Bearer segredo', 'content-type': 'application/json' };
   const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: 'POST', headers: h, body: JSON.stringify(body) });
   try {
@@ -82,13 +84,10 @@ test('API de clientes: cria, bloqueia conta repetida e mostra o cliente na ocorr
 
 test('login por usuário: sessão, perfis, bloqueio e revogação', async () => {
   const repo = new MemoryRepo();
-  await repo.criarUsuario({ login: 'admin', nome: 'Administrador', papel: 'admin', senhaHash: await hashSenha('senha-admin') });
-  const ana = await repo.criarUsuario({ login: 'ana', nome: 'Ana', papel: 'operador', senhaHash: await hashSenha('senha-ana-1') });
-  const clientes = new ClienteIndex(repo);
-  const queue = new IncidentQueue();
-  const server = createApi(queue, { publicDir: 'public', port: 0, repo, clientes });
-  const port = await listen(server, 0, '127.0.0.1');
-  const base = `http://127.0.0.1:${port}`;
+  const { id: eid } = await repo.criarEmpresa({ nome: 'Shop Sei', rotas: [] });
+  await repo.criarUsuario({ empresaId: eid, login: 'admin', nome: 'Administrador', papel: 'admin', senhaHash: await hashSenha('senha-admin') });
+  const ana = await repo.criarUsuario({ empresaId: eid, login: 'ana', nome: 'Ana', papel: 'operador', senhaHash: await hashSenha('senha-ana-1') });
+  const { queue, server, base } = await montar({ repo });
   const json = { 'content-type': 'application/json' };
   const login = (l: string, senha: string) => fetch(`${base}/api/login`, { method: 'POST', headers: json, body: JSON.stringify({ login: l, senha }) });
   const cookieDe = (r: Response) => (r.headers.get('set-cookie') ?? '').split(';')[0]!;
@@ -111,7 +110,9 @@ test('login por usuário: sessão, perfis, bloqueio e revogação', async () => 
     assert.match(ok.headers.get('set-cookie') ?? '', /SameSite=Strict/);
     const c = { ...json, cookie: cookieDe(ok) };
 
-    assert.deepEqual(await (await fetch(`${base}/api/eu`, { headers: c })).json(), { login: 'ana', nome: 'Ana', papel: 'operador', disponivel: false });
+    assert.deepEqual(await (await fetch(`${base}/api/eu`, { headers: c })).json(), {
+      login: 'ana', nome: 'Ana', papel: 'operador', plataforma: false, empresa: { id: eid, nome: 'Shop Sei' }, disponivel: false,
+    });
     // Operador não vê cadastro nem usuários, e não abre essas páginas.
     assert.equal((await fetch(`${base}/api/clientes`, { headers: c })).status, 403);
     assert.equal((await fetch(`${base}/api/usuarios`, { headers: c })).status, 403);
@@ -159,13 +160,10 @@ test('login por usuário: sessão, perfis, bloqueio e revogação', async () => 
 
 test('câmeras só aparecem a quem atende; estado do feed, histórico, CSV e troca de senha', async () => {
   const repo = new MemoryRepo();
-  await repo.criarUsuario({ login: 'ana', nome: 'Ana', papel: 'operador', senhaHash: await hashSenha('senha-ana-1') });
-  const clientes = new ClienteIndex(repo);
-  const queue = new IncidentQueue({ contaCadastrada: (c) => clientes.porConta(c) !== undefined });
+  const { id: eid } = await repo.criarEmpresa({ nome: 'Shop Sei', rotas: [] });
+  await repo.criarUsuario({ empresaId: eid, login: 'ana', nome: 'Ana', papel: 'operador', senhaHash: await hashSenha('senha-ana-1') });
   let ultimo: Date | undefined;
-  const server = createApi(queue, { token: 'segredo', publicDir: 'public', port: 0, repo, clientes, ultimoEvento: () => ultimo });
-  const port = await listen(server, 0, '127.0.0.1');
-  const base = `http://127.0.0.1:${port}`;
+  const { queue, server, base } = await montar({ repo, token: 'segredo', ultimoEvento: () => ultimo });
   const h = { authorization: 'Bearer segredo', 'content-type': 'application/json' };
   try {
     const r = await fetch(`${base}/api/clientes`, { method: 'POST', headers: h, body: JSON.stringify({

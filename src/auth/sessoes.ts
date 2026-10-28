@@ -3,6 +3,8 @@ import type { Papel } from '../store/repositorio.js';
 
 export interface Sessao {
   usuarioId: number;
+  // Empresa do usuário; null = dono do sistema.
+  empresaId: number | null;
   login: string;
   nome: string;
   papel: Papel;
@@ -66,16 +68,25 @@ export class Sessoes {
     this.falhas.delete(chave);
   }
 
-  temSessao(nome: string): boolean {
-    return [...this.porToken.values()].some((s) => s.nome === nome);
+  revogarEmpresa(empresaId: number): void {
+    for (const [t, s] of this.porToken) if (s.empresaId === empresaId) this.porToken.delete(t);
+  }
+
+  temSessao(empresaId: number | null, nome: string): boolean {
+    return [...this.porToken.values()].some((s) => s.empresaId === empresaId && s.nome === nome);
   }
 
   // Nomes cuja última chamada (o console consulta a cada 2 s) foi há mais de ms. Quem tem
   // mais de uma sessão só conta como ocioso se todas estiverem paradas.
-  ociosos(ms: number): string[] {
-    const ultimo = new Map<string, number>();
-    for (const s of this.porToken.values()) ultimo.set(s.nome, Math.max(ultimo.get(s.nome) ?? 0, s.visto));
-    return [...ultimo].filter(([, v]) => v < this.agora() - ms).map(([nome]) => nome);
+  ociosos(ms: number): { empresaId: number; nome: string }[] {
+    const ultimo = new Map<string, { empresaId: number; nome: string; visto: number }>();
+    for (const s of this.porToken.values()) {
+      if (s.empresaId === null) continue;
+      const chave = `${s.empresaId}|${s.nome}`;
+      const v = ultimo.get(chave);
+      if (!v || s.visto > v.visto) ultimo.set(chave, { empresaId: s.empresaId, nome: s.nome, visto: s.visto });
+    }
+    return [...ultimo.values()].filter((v) => v.visto < this.agora() - ms).map(({ empresaId, nome }) => ({ empresaId, nome }));
   }
 
   // Apaga sessões vencidas e tentativas antigas que ninguém mais consulta.

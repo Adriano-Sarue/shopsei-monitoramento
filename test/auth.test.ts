@@ -16,19 +16,19 @@ test('senha: hash confere só com a senha certa e nunca guarda a senha', async (
 test('sessões: expiram, mostram quem sumiu e bloqueiam tentativas', () => {
   let agora = 0;
   const s = new Sessoes(() => agora);
-  const a = s.criar({ usuarioId: 1, login: 'ana', nome: 'Ana', papel: 'operador' });
-  const b1 = s.criar({ usuarioId: 2, login: 'beto', nome: 'Beto', papel: 'operador' });
-  s.criar({ usuarioId: 2, login: 'beto', nome: 'Beto', papel: 'operador' });
+  const a = s.criar({ usuarioId: 1, empresaId: 1, login: 'ana', nome: 'Ana', papel: 'operador' });
+  const b1 = s.criar({ usuarioId: 2, empresaId: 1, login: 'beto', nome: 'Beto', papel: 'operador' });
+  s.criar({ usuarioId: 2, empresaId: 1, login: 'beto', nome: 'Beto', papel: 'operador' });
   agora = 100_000;
   s.obter(a);
   // Beto tem duas sessões paradas; Ana acabou de consultar.
-  assert.deepEqual(s.ociosos(90_000), ['Beto']);
+  assert.deepEqual(s.ociosos(90_000), [{ empresaId: 1, nome: 'Beto' }]);
   s.encerrar(b1);
-  assert.equal(s.temSessao('Beto'), true);
+  assert.equal(s.temSessao(1, 'Beto'), true);
   agora = 13 * 3600_000;
   assert.equal(s.obter(a), undefined);
   s.limpar();
-  assert.equal(s.temSessao('Beto'), false);
+  assert.equal(s.temSessao(1, 'Beto'), false);
 
   for (let i = 0; i < 4; i++) s.registrarFalha('x');
   assert.equal(s.bloqueado('x'), false);

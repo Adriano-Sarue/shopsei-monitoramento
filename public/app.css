@@ -24,8 +24,9 @@ h1, h2, h3 { margin: 0; }
 .topo nav a:hover { opacity: 1; background: rgba(255, 255, 255, .08); }
 .topo nav a.ativo { opacity: 1; background: rgba(255, 255, 255, .14); }
 .usuario { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.usuario .empresa { font-size: 12px; opacity: .75; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usuario .papel { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: rgba(255, 255, 255, .16); }
-@media (max-width: 640px) { .topo { gap: 8px; padding: 0 10px; } .marca small, .usuario .nome { display: none; } }
+@media (max-width: 640px) { .topo { gap: 8px; padding: 0 10px; } .marca small, .usuario .nome, .usuario .empresa { display: none; } }
 
 /* Controles */
 input, select, textarea, button { font: inherit; color: var(--ink); }
@@ -115,3 +116,11 @@ button.mini { padding: 2px 8px; font-size: 12px; border-radius: 6px; }
 .passo.feito { color: var(--mute); text-decoration: line-through; }
 .nota { display: flex; gap: 6px; margin-top: 8px; } .nota input { padding: 6px 9px; font-size: 14px; }
 .historico-acoes { margin: 8px 0 0; padding: 6px 0 0; border-top: 1px dashed var(--line); list-style: none; font-size: 12.5px; color: var(--mute); }
+
+/* Empresas (dono do sistema) */
+.rota { display: grid; grid-template-columns: 110px 1fr 1fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+.rota input, .rota select { padding: 6px 8px; font-size: 14px; }
+.etiqueta { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 99px; background: var(--bg); border: 1px solid var(--line); margin: 2px 4px 0 0; color: var(--mute); }
+.etiqueta.suspensa { background: var(--erro); border-color: var(--erro); color: #fff; }
+.sem-rota { margin-top: 18px; padding: 12px 14px; }
+.sem-rota h2 { font-size: 15px; margin-bottom: 6px; }
