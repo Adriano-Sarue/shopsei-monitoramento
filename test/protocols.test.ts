@@ -106,3 +106,13 @@ test('normalização: NULL vira supervisão e protocolo desconhecido não se per
   assert.equal(ev.category, 'other');
   assert.match(ev.description, /abc/);
 });
+
+test('Contact ID: textos usados na Shop Sei (250, 301, 360, 602)', () => {
+  assert.equal(parseContactId('1250 00 000').description, 'Falha de keep alive');
+  assert.equal(parseContactId('1250 00 000').category, 'fault');
+  assert.equal(parseContactId('1301 00 000').description, 'Falha AC');
+  assert.equal(parseContactId('3301 00 000').description, 'Restauração: Falha AC');
+  assert.equal(parseContactId('1360 01 000').description, 'Restauração na supervisão da central');
+  assert.equal(parseContactId('1360 01 000').category, 'supervision');
+  assert.equal(parseContactId('1602 00 000').description, 'Auto teste');
+});
