@@ -54,10 +54,10 @@ validarmos com uma captura real do feed.
 
 ## Pendente
 
-- Confirmar o formato que as centrais **JFL** usam ao reportar por IP. Se for
-  Contact ID/SIA dentro do DC-09, já funciona; se for um formato próprio da JFL,
-  entra como um novo decodificador em `src/protocols/`.
-- Banco PostgreSQL, fila de ocorrências, console do operador e relatórios (próximas etapas).
+- Validar o decodificador Sur-Gard com uma mensagem bruta atual (o `Monitor.Txt` do Moni
+  só vai até 12/2024) e a ponte que leva o feed serial do PC da empresa até o servidor.
+- Login por usuário e HTTPS (hoje há um token compartilhado).
+- Relatórios, envio de e-mail ao cliente e importação dos clientes existentes.
 
 ## Como rodar
 
