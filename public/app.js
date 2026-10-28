@@ -38,16 +38,22 @@ function mensagem(id, texto, tipo) { const m = $(id); m.textContent = texto; m.c
 async function iniciarTopo(ativa) {
   const eu = await api('/api/eu');
   const topo = el('header', 'topo');
-  const marca = el('a', 'marca'); marca.href = '/';
+  const marca = el('a', 'marca'); marca.href = eu.plataforma ? '/empresas.html' : '/';
   const logo = el('span', 'logo', 'S');
   const nome = el('span', '', 'Shop Sei'); nome.append(el('small', '', 'Monitoramento'));
   marca.append(logo, nome);
   const nav = el('nav');
-  const links = [['/', 'Fila', 'fila'], ['/historico.html', 'Histórico', 'historico']];
-  if (eu.papel === 'admin') links.push(['/clientes.html', 'Clientes', 'clientes'], ['/usuarios.html', 'Usuários', 'usuarios']);
+  // O dono do sistema cuida das empresas; quem é de uma empresa, da operação dela.
+  const links = eu.plataforma
+    ? [['/empresas.html', 'Empresas', 'empresas'], ['/usuarios.html', 'Donos do sistema', 'usuarios']]
+    : [['/', 'Fila', 'fila'], ['/historico.html', 'Histórico', 'historico']];
+  if (!eu.plataforma && eu.papel === 'admin') links.push(['/clientes.html', 'Clientes', 'clientes'], ['/usuarios.html', 'Usuários', 'usuarios']);
   for (const [href, texto, chave] of links) { const a = el('a', chave === ativa ? 'ativo' : '', texto); a.href = href; nav.append(a); }
   const quem = el('div', 'usuario');
-  quem.append(el('span', 'nome', eu.nome || 'Serviço'), el('span', 'papel', eu.papel === 'admin' ? 'Administrador' : 'Operador'));
+  const papel = eu.plataforma ? 'Plataforma' : eu.papel === 'admin' ? 'Administrador' : 'Operador';
+  quem.append(el('span', 'nome', eu.nome || 'Serviço'));
+  if (eu.empresa) quem.append(el('span', 'empresa', eu.empresa.nome));
+  quem.append(el('span', 'papel', papel));
   if (eu.login) {
     const senha = el('button', 'sutil', 'Senha');
     senha.onclick = trocarSenha;

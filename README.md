@@ -63,6 +63,21 @@ da Shop Sei ficam em `public/app.css` (variáveis no topo). **Ponha atrás de HT
 - **Falha de energia espera:** falha AC fica `FALHA_ENERGIA_ESPERA_MIN` minutos (padrão 30, 0 desliga) em pendente antes de ir à fila; um disparo na mesma conta traz a ocorrência de volta na hora. Quem conclui é sempre o operador.
 - **Trocar senha:** cada usuário troca a própria em *Senha*.
 
+## Várias empresas (venda do sistema)
+
+Um servidor atende várias empresas de monitoramento. Cada uma tem a **sua fila, os seus clientes, o seu histórico e
+os seus usuários**, e uma não vê nada da outra (a mesma conta pode existir em empresas diferentes).
+
+- **De quem é cada evento:** pelas *rotas* da empresa, que dizem canal (Sur-Gard ou IP/DC-09), receptora e linha
+  (`*` = qualquer). A rota mais específica vale: receptora exata ganha de linha exata, que ganha de `*`.
+  Evento que nenhuma rota reconhece não entra em fila nenhuma e aparece em *Eventos sem empresa*.
+- **Primeira subida:** cria a empresa `EMPRESA_NOME` (padrão Shop Sei) com rotas `*` nos dois canais, então tudo
+  continua funcionando como antes. Bancos antigos são migrados sozinhos: os dados viram da empresa 1.
+- **Dono do sistema:** com `PLATAFORMA_SENHA` definida, a primeira subida cria o usuário `PLATAFORMA_LOGIN`
+  (padrão `plataforma`). Ele entra em *Empresas*: cria empresa com o primeiro administrador, ajusta rotas,
+  cria usuário numa empresa (para recuperar acesso) e suspende/reativa. Suspender derruba quem está dentro e
+  impede novo login; os eventos continuam chegando à fila da empresa. O dono do sistema não vê fila nem clientes.
+
 ## Feed Sur-Gard (Active Net 3)
 
 Na Shop Sei os eventos chegam ao Moni pelo Active Net 3, que os repassa por porta
@@ -98,7 +113,7 @@ npm run simular -- --conta 1234 --protocolo NULL                       # supervi
 ```
 
 Variáveis de ambiente: `RECEPTORA_TCP_PORTA`, `RECEPTORA_UDP_PORTA` (padrão 9000),
-`DATABASE_URL`, `ADMIN_LOGIN`, `ADMIN_SENHA`, `SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
+`DATABASE_URL`, `ADMIN_LOGIN`, `ADMIN_SENHA`, `EMPRESA_NOME`, `PLATAFORMA_LOGIN`, `PLATAFORMA_SENHA`, `SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
 
 Para colocar no ar num servidor (com banco, HTTPS e backup), siga [deploy/LEIAME.md](deploy/LEIAME.md).
 

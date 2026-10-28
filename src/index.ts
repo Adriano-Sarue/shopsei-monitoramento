@@ -3,15 +3,14 @@ import { randomBytes } from 'node:crypto';
 import { hashSenha } from './auth/senha.js';
 import { Sessoes } from './auth/sessoes.js';
 import { eventoInterno } from './incidents/planos.js';
-import { IncidentQueue } from './incidents/queue.js';
-import { SupervisaoTeste } from './incidents/supervisao.js';
+import { Central, type Canal } from './central.js';
 import { AccountRegistry } from './receiver/accounts.js';
 import { Receiver, type RawFrame } from './receiver/server.js';
 import { SurgardServer } from './receiver/surgardServer.js';
 import { JsonlStore } from './store/jsonlStore.js';
 import { MemoryRepo } from './store/memoryRepo.js';
 import { PgRepo } from './store/pgRepo.js';
-import { ClienteIndex, type Repositorio } from './store/repositorio.js';
+import type { Repositorio } from './store/repositorio.js';
 import type { AlarmEvent } from './protocols/types.js';
 
 const tcpPort = Number(process.env.RECEPTORA_TCP_PORTA ?? 9000);
@@ -22,8 +21,18 @@ const accounts = AccountRegistry.fromFile(process.env.CONTAS_ARQUIVO ?? 'config/
 const repo: Repositorio = process.env.DATABASE_URL ? new PgRepo(process.env.DATABASE_URL) : new MemoryRepo();
 if (!process.env.DATABASE_URL) console.warn('DATABASE_URL não definida: rodando sem banco, fila e clientes somem ao reiniciar');
 await repo.init();
-const clientes = new ClienteIndex(repo);
-await clientes.refresh();
+
+// Primeira subida: cria a empresa dona do servidor (a Shop Sei) com rotas coringa, para receber tudo que chegar.
+// Bancos de antes do multiempresa já ganharam a empresa 1 no esquema; ela recebe as rotas coringa se ninguém tiver rota.
+let empresas = await repo.listarEmpresas();
+const coringa = [{ canal: 'surgard' as const, receptora: '*', linha: '*' }, { canal: 'dc09' as const, receptora: '*', linha: '*' }];
+if (empresas.length === 0) {
+  await repo.criarEmpresa({ nome: process.env.EMPRESA_NOME ?? 'Shop Sei', rotas: coringa });
+  empresas = await repo.listarEmpresas();
+} else if (empresas.length === 1 && empresas[0]!.rotas.length === 0) {
+  await repo.atualizarEmpresa(empresas[0]!.id, { rotas: coringa });
+}
+const empresaPrincipal = (await repo.listarEmpresas())[0]!;
 
 // As gravações da mesma ocorrência vão em fila, para o estado mais novo ser sempre o último a chegar ao banco.
 let gravacao: Promise<unknown> = Promise.resolve();
@@ -32,12 +41,11 @@ function gravar(fn: () => Promise<unknown>): void {
 }
 // Falha de energia costuma voltar sozinha: espera esse tempo em "pendente" antes de ir à fila (0 desliga).
 const esperaEnergiaMin = Number(process.env.FALHA_ENERGIA_ESPERA_MIN ?? 30);
-const queue = new IncidentQueue({
-  contaCadastrada: (conta) => clientes.porConta(conta) !== undefined,
+const central = new Central(repo, {
   esperaMin: (e) => (e.code === '301' && e.qualifier !== 'restore' ? esperaEnergiaMin : 0),
   onChange: (o) => gravar(() => repo.salvarOcorrencia(o)),
 });
-queue.restore(await repo.carregarOcorrenciasAbertas());
+await central.iniciar();
 const store = new JsonlStore(process.env.DADOS_DIR ?? 'data');
 
 const receiver = new Receiver({ tcpPort, udpPort, keyFor: accounts.keyFor });
@@ -48,25 +56,28 @@ receiver.on('raw', (raw: RawFrame) => {
   if (!raw.ok) console.warn(`[NAK] ${raw.remote}: ${raw.error}`);
 });
 
-let ultimoEvento: Date | undefined;
-const supervisao = new SupervisaoTeste((conta) => clientes.porConta(conta)?.intervaloTesteHoras);
-supervisao.carregar(await repo.ultimosEventos());
+const ultimoEvento = new Map<number, Date>();
 
-function onEvent(event: AlarmEvent): void {
-  if (event.protocol !== 'INTERNO') {
-    ultimoEvento = new Date();
-    supervisao.registrar(event.account, new Date(event.receivedAt));
-  }
+function onEvent(event: AlarmEvent, canal: Canal): void {
   store.appendEvent(event).catch((err) => console.error('Falha ao gravar evento:', err));
+  const empresaId = central.rotear(event, canal);
   gravar(() => repo.salvarEvento(event));
-  queue.handleEvent(event);
+  if (empresaId === undefined) {
+    console.warn(`[SEM ROTA] ${canal} receptora ${event.receiver ?? '-'} linha ${event.line} conta ${event.account}: ${event.description}`);
+    return;
+  }
+  if (event.protocol !== 'INTERNO') {
+    ultimoEvento.set(empresaId, new Date());
+    central.supervisao(empresaId).registrar(event.account, new Date(event.receivedAt));
+  }
+  central.fila(empresaId).handleEvent(event);
   if (event.category === 'supervision') return;
-  const name = clientes.porConta(event.account)?.nome ?? 'conta não cadastrada';
+  const name = central.clientes(empresaId).porConta(event.account)?.nome ?? 'conta não cadastrada';
   const zone = event.zoneOrUser ? ` zona/usuário ${event.zoneOrUser}` : '';
-  console.log(`[P${event.priority}] conta ${event.account} (${name}): ${event.description}${zone}`);
+  console.log(`[E${empresaId} P${event.priority}] conta ${event.account} (${name}): ${event.description}${zone}`);
 }
 
-receiver.on('event', onEvent);
+receiver.on('event', (e: AlarmEvent) => onEvent(e, 'dc09'));
 
 const ports = await receiver.start();
 console.log(`Receptora ouvindo TCP ${ports.tcpPort} e UDP ${ports.udpPort}`);
@@ -79,35 +90,52 @@ if (process.env.SURGARD_TCP_PORTA) {
     store.appendRaw(raw).catch((err) => console.error('Falha ao gravar quadro bruto:', err));
     if (!raw.ok) console.warn(`[NAK] Sur-Gard ${raw.remote}: ${raw.error}`);
   });
-  surgard.on('event', onEvent);
+  surgard.on('event', (e: AlarmEvent) => onEvent(e, 'surgard'));
   console.log(`Feed Sur-Gard ouvindo TCP ${await surgard.start()}`);
 }
 
-// Console web: pessoas entram com usuário e senha. Na primeira subida cria o administrador inicial.
-if ((await repo.listarUsuarios()).length === 0) {
+// Console web: pessoas entram com usuário e senha. Na primeira subida cria o administrador da empresa principal
+// e, se PLATAFORMA_SENHA for definida, o dono do sistema (cadastra as empresas compradoras).
+if ((await repo.listarUsuarios(empresaPrincipal.id)).length === 0) {
   const login = (process.env.ADMIN_LOGIN ?? 'admin').toLowerCase();
   const senha = process.env.ADMIN_SENHA ?? randomBytes(9).toString('base64url');
-  await repo.criarUsuario({ login, nome: 'Administrador', papel: 'admin', senhaHash: await hashSenha(senha) });
+  await repo.criarUsuario({ empresaId: empresaPrincipal.id, login, nome: 'Administrador', papel: 'admin', senhaHash: await hashSenha(senha) });
   console.log(`Administrador criado: login "${login}"${process.env.ADMIN_SENHA ? '' : `, senha "${senha}" (anote e troque em Usuários)`}`);
 }
+if (process.env.PLATAFORMA_SENHA && (await repo.listarUsuarios(null)).length === 0) {
+  const login = (process.env.PLATAFORMA_LOGIN ?? 'plataforma').toLowerCase();
+  await repo.criarUsuario({ empresaId: null, login, nome: 'Dono do sistema', papel: 'admin', senhaHash: await hashSenha(process.env.PLATAFORMA_SENHA) });
+  console.log(`Dono do sistema criado: login "${login}"`);
+}
 const sessoes = new Sessoes();
-const api = createApi(queue, { token: process.env.CONSOLE_TOKEN, sessoes, publicDir: 'public', port: 0, repo, clientes, ultimoEvento: () => ultimoEvento });
+const api = createApi(central, {
+  token: process.env.CONSOLE_TOKEN, tokenEmpresa: empresaPrincipal.id, sessoes, publicDir: 'public', port: 0, repo,
+  ultimoEvento: (empresaId) => ultimoEvento.get(empresaId),
+});
 console.log(`Console web ouvindo na porta ${await listen(api, Number(process.env.CONSOLE_PORTA ?? 8090))}`);
-setInterval(() => queue.reativarVencidas(), 30_000).unref();
+setInterval(() => {
+  for (const [, fila] of central.todasAsFilas()) fila.reativarVencidas();
+}, 30_000).unref();
 // O console consulta a fila a cada 2 s. Operador sem sinal há 90 s sai da escala e devolve o que estava com ele.
 setInterval(() => {
-  for (const nome of sessoes.ociosos(90_000)) {
-    if (queue.estaDisponivel(nome) || queue.list().some((o) => o.operador === nome && o.situacao === 'em_atendimento')) {
-      console.warn(`Operador ${nome} sem sinal: ocorrências devolvidas à fila`);
-      queue.desconectar(nome);
+  for (const { empresaId, nome } of sessoes.ociosos(90_000)) {
+    if (!central.empresa(empresaId)) continue;
+    const fila = central.fila(empresaId);
+    if (fila.estaDisponivel(nome) || fila.list().some((o) => o.operador === nome && o.situacao === 'em_atendimento')) {
+      console.warn(`Operador ${nome} (empresa ${empresaId}) sem sinal: ocorrências devolvidas à fila`);
+      fila.desconectar(nome);
     }
   }
-  const contas = [...new Set(clientes.todos().flatMap((c) => c.contas))];
-  for (const { conta, desde, horas } of supervisao.atrasadas(contas)) {
-    onEvent(eventoInterno(conta, 'TST', `Falta de teste periódico: nenhum sinal há mais de ${horas} h (desde ${desde.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })})`, new Date()));
+  for (const e of central.listaEmpresas()) {
+    const contas = [...new Set(central.clientes(e.id).todos().flatMap((c) => c.contas))];
+    for (const { conta, desde, horas } of central.supervisao(e.id).atrasadas(contas)) {
+      const ev = eventoInterno(conta, 'TST', `Falta de teste periódico: nenhum sinal há mais de ${horas} h (desde ${desde.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })})`, new Date());
+      ev.empresaId = e.id;
+      onEvent(ev, 'dc09');
+    }
   }
   sessoes.limpar();
-  queue.podar(60 * 60_000);
+  for (const [, fila] of central.todasAsFilas()) fila.podar(60 * 60_000);
 }, 15_000).unref();
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

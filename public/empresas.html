@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Empresas · Shop Sei Monitoramento</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main class="pagina cadastro">
+  <section>
+    <h1 style="font-size:20px;margin-bottom:4px">Empresas</h1>
+    <p class="mute" style="margin:0 0 12px">Cada empresa tem a sua fila, os seus clientes e os seus usuários. As rotas dizem de qual empresa é cada evento que chega.</p>
+    <div id="lista"></div>
+    <div class="cartao sem-rota">
+      <h2>Eventos sem empresa</h2>
+      <p class="mute" style="margin:0 0 8px">Chegaram de uma receptora e linha que nenhuma rota reconhece, por isso não entraram em fila nenhuma.</p>
+      <div id="sem-rota"></div>
+    </div>
+  </section>
+  <form id="form" class="cartao painel">
+    <h2 id="titulo">Nova empresa</h2>
+    <label>Nome da empresa <input id="nome" required maxlength="120"></label>
+    <fieldset>
+      <legend>Rotas</legend>
+      <p class="mute" style="margin:0 0 8px">Receptora e linha que a central usa ao enviar. Use * para "qualquer uma". A rota mais específica vale.</p>
+      <div id="rotas"></div>
+      <button type="button" id="mais-rota" style="margin-bottom:10px">+ Rota</button>
+    </fieldset>
+    <fieldset id="admin">
+      <legend>Primeiro administrador</legend>
+      <label>Nome <input id="admin-nome"></label>
+      <label>Login <input id="admin-login" autocapitalize="none" autocomplete="off"></label>
+      <label>Senha (mínimo 8 caracteres) <input id="admin-senha" type="password" autocomplete="new-password"></label>
+    </fieldset>
+    <div id="msg" class="msg" role="status"></div>
+    <div style="display:flex;gap:8px"><button class="marca-btn" type="submit">Salvar</button><button type="button" id="limpar">Nova</button></div>
+  </form>
+</main>
+<script src="/app.js"></script>
+<script>
+let editando = null;
+
+function linhaRota(r = { canal: 'surgard', receptora: '*', linha: '*' }) {
+  const d = el('div', 'rota');
+  const canal = el('select');
+  for (const [v, t] of [['surgard', 'Sur-Gard'], ['dc09', 'IP (DC-09)']]) { const o = el('option', '', t); o.value = v; canal.append(o); }
+  canal.value = r.canal;
+  const rec = el('input'); rec.value = r.receptora; rec.placeholder = 'Receptora'; rec.setAttribute('aria-label', 'Receptora');
+  const lin = el('input'); lin.value = r.linha; lin.placeholder = 'Linha'; lin.setAttribute('aria-label', 'Linha');
+  const tira = el('button', 'mini perigo', 'Tirar'); tira.type = 'button'; tira.onclick = () => d.remove();
+  d.append(canal, rec, lin, tira);
+  d.ler = () => ({ canal: canal.value, receptora: rec.value.trim() || '*', linha: lin.value.trim() || '*' });
+  $('rotas').append(d);
+}
+const rotasDoForm = () => [...$('rotas').children].map((d) => d.ler());
+const textoRota = (r) => (r.canal === 'dc09' ? 'IP' : 'Sur-Gard') + ' ' + r.receptora + '/' + r.linha;
+
+function limpar() {
+  editando = null; $('titulo').textContent = 'Nova empresa';
+  for (const id of ['nome', 'admin-nome', 'admin-login', 'admin-senha']) $(id).value = '';
+  $('admin').style.display = '';
+  $('rotas').replaceChildren(); linhaRota();
+  mensagem('msg', '');
+}
+function editar(e) {
+  editando = e.id; $('titulo').textContent = 'Editar ' + e.nome;
+  $('nome').value = e.nome; $('admin').style.display = 'none';
+  $('rotas').replaceChildren(); e.rotas.forEach(linhaRota);
+  mensagem('msg', '');
+  $('nome').focus();
+}
+
+function novoUsuario(e) {
+  const dlg = el('dialog');
+  const form = el('form');
+  form.append(el('h3', '', 'Novo usuário em ' + e.nome), el('p', 'mute', 'Use para criar outro administrador ou recuperar o acesso da empresa.'));
+  const campo = (rotulo, tipo, auto) => { const l = el('label', '', rotulo); const i = el('input'); i.type = tipo; i.required = true; i.autocomplete = auto; l.append(i); form.append(l); return i; };
+  const nome = campo('Nome', 'text', 'off');
+  const login = campo('Login', 'text', 'off'); login.autocapitalize = 'none';
+  const l = el('label', '', 'Perfil'); const papel = el('select');
+  for (const [v, t] of [['admin', 'Administrador'], ['operador', 'Operador']]) { const o = el('option', '', t); o.value = v; papel.append(o); }
+  l.append(papel); form.append(l);
+  const senha = campo('Senha (mínimo 8 caracteres)', 'password', 'new-password');
+  const erro = el('div', 'msg erro');
+  const botoes = el('div', 'botoes');
+  const cancelar = el('button', '', 'Cancelar'); cancelar.type = 'button'; cancelar.onclick = () => dlg.close();
+  const ok = el('button', 'marca-btn', 'Criar'); ok.type = 'submit';
+  botoes.append(cancelar, ok);
+  form.append(erro, botoes);
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    try {
+      await api('/api/empresas/' + e.id + '/usuarios', { method: 'POST', body: JSON.stringify({ nome: nome.value, login: login.value, papel: papel.value, senha: senha.value }) });
+      dlg.close(); toast('Usuário criado em ' + e.nome);
+    } catch (err) { erro.textContent = err.message; }
+  };
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.append(form); document.body.append(dlg); dlg.showModal();
+}
+
+async function suspender(e) {
+  const acao = e.ativo ? 'Suspender' : 'Reativar';
+  const aviso = e.ativo ? 'Os usuários de ' + e.nome + ' saem na hora e não conseguem entrar. Os eventos continuam chegando à fila deles.' : 'Os usuários de ' + e.nome + ' voltam a entrar.';
+  const dlg = el('dialog');
+  const form = el('form'); form.method = 'dialog';
+  form.append(el('h3', '', acao + ' ' + e.nome + '?'), el('p', 'mute', aviso));
+  const botoes = el('div', 'botoes');
+  const cancelar = el('button', '', 'Cancelar'); cancelar.value = 'nao';
+  const ok = el('button', e.ativo ? 'perigo' : 'marca-btn', acao); ok.value = 'sim';
+  botoes.append(cancelar, ok); form.append(botoes);
+  dlg.addEventListener('close', async () => {
+    dlg.remove();
+    if (dlg.returnValue !== 'sim') return;
+    try { await api('/api/empresas/' + e.id, { method: 'PUT', body: JSON.stringify({ ativo: !e.ativo }) }); toast(e.nome + (e.ativo ? ' suspensa' : ' reativada')); carregar(); } catch (err) { toast(err.message); }
+  });
+  dlg.append(form); document.body.append(dlg); dlg.showModal();
+}
+
+async function carregar() {
+  try {
+    const es = await api('/api/empresas');
+    if (!es.length) { $('lista').replaceChildren(el('div', 'vazio', 'Nenhuma empresa ainda.')); }
+    else $('lista').replaceChildren(...es.map((e) => {
+      const d = el('div', 'cartao item' + (e.ativo ? '' : ' inativo'));
+      const t = el('div');
+      const nome = el('strong', '', e.nome);
+      const info = el('div', 'mute', e.clientes + (e.clientes === 1 ? ' cliente' : ' clientes') + ' · ' + (e.ultimoEventoEm ? 'último evento ' + haQuanto(e.ultimoEventoEm) : 'nenhum evento desde que o servidor ligou'));
+      const rotas = el('div');
+      if (!e.ativo) rotas.append(el('span', 'etiqueta suspensa', 'Suspensa'));
+      if (!e.rotas.length) rotas.append(el('span', 'etiqueta', 'sem rota: não recebe eventos'));
+      for (const r of e.rotas) rotas.append(el('span', 'etiqueta', textoRota(r)));
+      t.append(nome, info, rotas);
+      const b = el('div'); b.style.display = 'flex'; b.style.gap = '6px'; b.style.flexWrap = 'wrap'; b.style.justifyContent = 'flex-end';
+      const ed = el('button', '', 'Editar'); ed.onclick = () => editar(e);
+      const us = el('button', '', '+ Usuário'); us.onclick = () => novoUsuario(e);
+      const su = el('button', e.ativo ? 'perigo' : '', e.ativo ? 'Suspender' : 'Reativar'); su.onclick = () => suspender(e);
+      b.append(ed, us, su);
+      d.append(t, b); return d;
+    }));
+    const sem = await api('/api/sem-rota');
+    if (!sem.length) { $('sem-rota').replaceChildren(el('div', 'vazio', 'Nenhum. Todos os eventos têm empresa.')); return; }
+    $('sem-rota').replaceChildren(...sem.slice(0, 15).map((s) => {
+      const d = el('div', 'contato');
+      d.append(el('span', '', hora(s.em) + ' · ' + textoRota(s) + ' · conta ' + s.conta + ' · ' + s.descricao));
+      const usar = el('button', 'mini', 'Usar no formulário');
+      usar.onclick = () => { linhaRota({ canal: s.canal, receptora: s.receptora || '*', linha: s.linha || '*' }); toast('Rota adicionada ao formulário: salve para valer'); };
+      d.append(usar); return d;
+    }));
+  } catch (err) { mensagem('msg', err.message, 'erro'); }
+}
+
+$('mais-rota').onclick = () => linhaRota();
+$('limpar').onclick = limpar;
+$('form').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const corpo = { nome: $('nome').value, rotas: rotasDoForm() };
+  try {
+    if (editando) await api('/api/empresas/' + editando, { method: 'PUT', body: JSON.stringify(corpo) });
+    else await api('/api/empresas', { method: 'POST', body: JSON.stringify({ ...corpo, admin: { nome: $('admin-nome').value, login: $('admin-login').value, senha: $('admin-senha').value } }) });
+    toast(editando ? 'Empresa salva' : 'Empresa criada: o administrador já pode entrar');
+    limpar(); carregar();
+  } catch (err) { mensagem('msg', err.message, 'erro'); }
+};
+(async () => { await iniciarTopo('empresas'); limpar(); carregar(); setInterval(carregar, 15000); })();
+</script>
+</body>
+</html>

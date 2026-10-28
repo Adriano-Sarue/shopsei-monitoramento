@@ -49,6 +49,12 @@ docker compose logs -f app
 Abra `https://SEU_DOMINIO`, entre com `ADMIN_LOGIN` e `ADMIN_SENHA` e troque a senha em *Senha*.
 Depois crie os operadores em *Usuários*.
 
+Para vender o uso a outras empresas, defina `PLATAFORMA_SENHA` no `.env` antes da primeira subida e entre com
+`PLATAFORMA_LOGIN`. Em *Empresas* você cria cada empresa compradora com o primeiro administrador e as rotas
+(receptora e linha que as centrais dela usam). Ao criar a primeira empresa compradora, troque a rota `*` da sua
+empresa pelas suas receptoras/linhas, senão os eventos novos dela continuam caindo na sua fila quando não houver
+rota mais específica.
+
 ## 5. Atualizar
 
 ```bash

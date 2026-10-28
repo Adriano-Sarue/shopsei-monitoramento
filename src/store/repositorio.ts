@@ -38,11 +38,53 @@ export interface Cliente extends NovoCliente {
 
 export class ContaDuplicadaError extends Error {}
 export class LoginDuplicadoError extends Error {}
+export class RotaDuplicadaError extends Error {}
+export class NaoEncontradoError extends Error {}
 
 export type Papel = 'operador' | 'admin';
 
+// Por onde os eventos de uma empresa chegam: canal (feed Sur-Gard ou SIA DC-09) + número da receptora e da
+// linha que as centrais dela usam. "*" vale para qualquer número; a rota mais específica ganha.
+export interface Rota {
+  canal: 'surgard' | 'dc09';
+  receptora: string;
+  linha: string;
+}
+
+export interface Empresa {
+  id: number;
+  nome: string;
+  ativo: boolean;
+  rotas: Rota[];
+}
+
+export function normalizarNumero(v: string | undefined): string {
+  const t = (v ?? '').trim().toUpperCase();
+  if (t === '*') return '*';
+  return /^\d+$/.test(t) ? String(Number(t)) : t;
+}
+
+export function validarEmpresa(e: { nome: string; rotas?: Rota[] }): { nome: string; rotas: Rota[] } {
+  const nome = e.nome?.trim();
+  if (!nome) throw new Error('Nome da empresa é obrigatório');
+  const vistas = new Set<string>();
+  const rotas = (e.rotas ?? []).map((r) => {
+    if (r.canal !== 'surgard' && r.canal !== 'dc09') throw new Error('Canal da rota deve ser surgard ou dc09');
+    const receptora = normalizarNumero(r.receptora) || '*';
+    const linha = normalizarNumero(r.linha) || '*';
+    if (!/^(\*|[0-9A-F]{1,8})$/.test(receptora) || !/^(\*|[0-9A-F]{1,8})$/.test(linha)) throw new Error('Receptora e linha devem ser números ou *');
+    const chave = `${r.canal}|${receptora}|${linha}`;
+    if (vistas.has(chave)) throw new Error('Rota repetida');
+    vistas.add(chave);
+    return { canal: r.canal, receptora, linha };
+  });
+  return { nome, rotas };
+}
+
 export interface Usuario {
   id: number;
+  // Empresa dona do usuário; null = dono do sistema (cadastra empresas, não atende fila).
+  empresaId: number | null;
   login: string;
   nome: string;
   papel: Papel;
@@ -51,6 +93,7 @@ export interface Usuario {
 }
 
 export interface NovoUsuario {
+  empresaId: number | null;
   login: string;
   nome: string;
   papel: Papel;
@@ -66,6 +109,12 @@ export function validarUsuario(u: { login: string; nome: string; papel: string }
   return { login, nome, papel: u.papel };
 }
 
+export interface UltimoEvento {
+  empresaId: number;
+  conta: string;
+  em: Date;
+}
+
 export interface FiltroHistorico {
   conta?: string;
   de?: Date;
@@ -74,21 +123,27 @@ export interface FiltroHistorico {
 }
 
 // Contrato de persistência. Há uma implementação em PostgreSQL e uma em memória (testes e dev).
+// Tudo que é de uma empresa recebe o empresaId: uma empresa nunca lê nem altera dado de outra.
 export interface Repositorio {
   init(): Promise<void>;
+  listarEmpresas(): Promise<Empresa[]>;
+  criarEmpresa(e: { nome: string; rotas?: Rota[] }): Promise<Empresa>;
+  atualizarEmpresa(id: number, m: { nome?: string; ativo?: boolean; rotas?: Rota[] }): Promise<Empresa>;
+  // Evento sem empresa (nenhuma rota casou) também é gravado, com empresaId vazio.
   salvarEvento(e: AlarmEvent): Promise<void>;
   salvarOcorrencia(o: Ocorrencia): Promise<void>;
   carregarOcorrenciasAbertas(): Promise<Ocorrencia[]>;
-  listarEncerradas(filtro: FiltroHistorico): Promise<Ocorrencia[]>;
+  listarEncerradas(empresaId: number, filtro: FiltroHistorico): Promise<Ocorrencia[]>;
   // Último evento recebido de cada conta (para retomar a supervisão de teste após reinício).
-  ultimosEventos(): Promise<Map<string, Date>>;
-  listarClientes(): Promise<Cliente[]>;
-  criarCliente(c: NovoCliente): Promise<Cliente>;
-  atualizarCliente(id: number, c: NovoCliente): Promise<Cliente>;
-  listarUsuarios(): Promise<Usuario[]>;
+  ultimosEventos(): Promise<UltimoEvento[]>;
+  listarClientes(empresaId: number): Promise<Cliente[]>;
+  criarCliente(empresaId: number, c: NovoCliente): Promise<Cliente>;
+  atualizarCliente(empresaId: number, id: number, c: NovoCliente): Promise<Cliente>;
+  // empresaId null lista só os donos do sistema.
+  listarUsuarios(empresaId: number | null): Promise<Usuario[]>;
   buscarUsuario(login: string): Promise<Usuario | undefined>;
   criarUsuario(u: NovoUsuario): Promise<Usuario>;
-  atualizarUsuario(id: number, mudancas: Partial<Pick<Usuario, 'nome' | 'papel' | 'ativo' | 'senhaHash'>>): Promise<Usuario>;
+  atualizarUsuario(empresaId: number | null, id: number, mudancas: Partial<Pick<Usuario, 'nome' | 'papel' | 'ativo' | 'senhaHash'>>): Promise<Usuario>;
   fechar(): Promise<void>;
 }
 
@@ -121,10 +176,10 @@ export function validarCliente(c: NovoCliente): NovoCliente {
 export class ClienteIndex {
   private byConta = new Map<string, Cliente>();
 
-  constructor(private readonly repo: Repositorio) {}
+  constructor(private readonly repo: Repositorio, private readonly empresaId: number) {}
 
   async refresh(): Promise<void> {
-    const all = await this.repo.listarClientes();
+    const all = await this.repo.listarClientes(this.empresaId);
     this.byConta = new Map(all.filter((c) => c.ativo).flatMap((c) => c.contas.map((conta) => [conta.toUpperCase(), c] as const)));
   }
 
