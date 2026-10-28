@@ -55,7 +55,7 @@ h1, h2, h3 { margin: 0; letter-spacing: -.022em; }
   background: var(--card-forte); border: 1px solid var(--vidro-borda); box-shadow: var(--vidro-brilho), var(--sombra);
 }
 .marca { display: flex; align-items: center; gap: 10px; font-weight: 650; text-decoration: none; letter-spacing: -.02em; }
-.marca .logo { width: 38px; height: 38px; border-radius: 11px; display: block; box-shadow: 0 2px 8px rgba(0, 20, 60, .25); }
+.marca .logo { width: 40px; height: 40px; display: block; filter: drop-shadow(0 2px 4px rgba(0, 20, 60, .3)); }
 .marca small { display: block; font-weight: 450; color: var(--mute); font-size: 11px; margin-top: -2px; letter-spacing: 0; }
 /* Navegação em controle segmentado */
 .topo nav { display: flex; gap: 2px; margin-right: auto; padding: 3px; border-radius: 99px; background: var(--campo); }
@@ -116,9 +116,9 @@ label > input, label > select, label > textarea { margin-top: 5px; color: var(--
   color-scheme: dark; --ink: #f5f5f7; --mute: #a1a1aa; --campo: rgba(255, 255, 255, .10); --card: rgba(255, 255, 255, .08); --card-forte: rgba(255, 255, 255, .16); --vidro-borda: rgba(255, 255, 255, .16);
   --vidro-brilho: inset 0 1px 0 rgba(255, 255, 255, .22);
 }
-.login-caixa { width: 100%; max-width: 390px; padding: 0 30px 28px; overflow: hidden; border-radius: 30px; box-shadow: var(--vidro-brilho), 0 40px 100px rgba(0, 0, 0, .55); }
-.login-caixa .logo-grande { display: block; margin: 0 -30px 22px; position: relative; }
-.login-caixa .logo-grande img { display: block; width: 100%; height: 250px; object-fit: cover; object-position: 50% 62%; -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent); mask-image: linear-gradient(180deg, #000 70%, transparent); }
+.login-caixa { width: 100%; max-width: 390px; padding: 34px 30px 28px; border-radius: 30px; box-shadow: var(--vidro-brilho), 0 40px 100px rgba(0, 0, 0, .55); }
+.login-caixa .logo-grande { display: block; margin: 0 auto 24px; width: 190px; }
+.login-caixa .logo-grande img { display: block; width: 100%; height: auto; filter: drop-shadow(0 0 26px rgba(40, 110, 255, .45)) drop-shadow(0 10px 24px rgba(0, 0, 0, .45)); }
 .login-caixa h1 { font-size: 24px; font-weight: 700; text-align: center; } .login-caixa p { margin: 4px 0 24px; text-align: center; }
 .login-caixa button { width: 100%; padding: 13px; font-size: 16px; }
 

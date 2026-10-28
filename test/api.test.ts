@@ -234,7 +234,7 @@ test('disparo vem marcado como alarme; falha de energia não; logo e ícone são
     const lista = (await (await fetch(`${base}/api/ocorrencias`, { headers: h })).json()) as { conta: string; alarme: boolean }[];
     assert.deepEqual(Object.fromEntries(lista.map((o) => [o.conta, o.alarme])), { '0020': true, '0021': false, '0022': true });
 
-    for (const [caminho, tipo] of [['/logo.jpg', 'image/jpeg'], ['/logo-icone.png', 'image/png'], ['/favicon.png', 'image/png'], ['/fontes/inter.woff2', 'font/woff2']]) {
+    for (const [caminho, tipo] of [['/logo-recortada.png', 'image/png'], ['/logo-icone.png', 'image/png'], ['/favicon.png', 'image/png'], ['/fontes/inter.woff2', 'font/woff2']]) {
       const r = await fetch(base + caminho);
       assert.equal(r.status, 200, caminho);
       assert.equal(r.headers.get('content-type'), tipo);

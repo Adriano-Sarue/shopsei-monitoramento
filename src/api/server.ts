@@ -128,7 +128,7 @@ const PAGINAS: Record<string, { arquivo: string; tipo: string; publica?: boolean
   '/login.html': { arquivo: 'login.html', tipo: 'text/html', publica: true },
   '/app.css': { arquivo: 'app.css', tipo: 'text/css', publica: true },
   '/app.js': { arquivo: 'app.js', tipo: 'application/javascript', publica: true },
-  '/logo.jpg': { arquivo: 'logo.jpg', tipo: 'image/jpeg', publica: true },
+  '/logo-recortada.png': { arquivo: 'logo-recortada.png', tipo: 'image/png', publica: true },
   '/logo-icone.png': { arquivo: 'logo-icone.png', tipo: 'image/png', publica: true },
   '/favicon.png': { arquivo: 'favicon.png', tipo: 'image/png', publica: true },
   '/fontes/inter.woff2': { arquivo: 'fontes/inter.woff2', tipo: 'font/woff2', publica: true },
