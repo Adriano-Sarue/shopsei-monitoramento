@@ -139,3 +139,44 @@ CREATE INDEX IF NOT EXISTS clientes_empresa_idx ON clientes (empresa_id, nome);
 CREATE INDEX IF NOT EXISTS usuarios_empresa_idx ON usuarios (empresa_id);
 CREATE INDEX IF NOT EXISTS ocorrencias_empresa_idx ON ocorrencias (empresa_id, situacao, encerrada_em DESC);
 CREATE INDEX IF NOT EXISTS eventos_empresa_idx ON eventos (empresa_id, conta, recebido_em DESC);
+
+-- ---- Portaria remota: condomínios, unidades com quem mora/pode entrar, e o registro de cada atendimento.
+CREATE TABLE IF NOT EXISTS condominios (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id BIGINT NOT NULL REFERENCES empresas(id),
+  nome TEXT NOT NULL,
+  endereco TEXT,
+  instrucoes TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS condominios_empresa_idx ON condominios (empresa_id, nome);
+
+-- Pessoas da unidade em JSON: são lidas e gravadas sempre junto com a unidade.
+CREATE TABLE IF NOT EXISTS unidades (
+  id BIGSERIAL PRIMARY KEY,
+  condominio_id BIGINT NOT NULL REFERENCES condominios(id) ON DELETE CASCADE,
+  bloco TEXT NOT NULL DEFAULT '',
+  numero TEXT NOT NULL,
+  observacao TEXT,
+  pessoas JSONB NOT NULL DEFAULT '[]',
+  UNIQUE (condominio_id, bloco, numero)
+);
+
+CREATE TABLE IF NOT EXISTS atendimentos_portaria (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id BIGINT NOT NULL REFERENCES empresas(id),
+  condominio_id BIGINT NOT NULL REFERENCES condominios(id),
+  unidade_id BIGINT REFERENCES unidades(id) ON DELETE SET NULL,
+  -- Cópia do bloco/número no momento do atendimento: o histórico continua legível se a unidade for apagada.
+  unidade TEXT,
+  em TIMESTAMPTZ NOT NULL,
+  operador TEXT NOT NULL,
+  tipo TEXT NOT NULL,
+  visitante TEXT NOT NULL,
+  documento TEXT,
+  decisao TEXT NOT NULL,
+  autorizado_por TEXT,
+  observacao TEXT
+);
+CREATE INDEX IF NOT EXISTS atendimentos_portaria_idx ON atendimentos_portaria (empresa_id, condominio_id, em DESC);

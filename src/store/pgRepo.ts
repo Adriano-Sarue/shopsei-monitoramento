@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import type { Ocorrencia, Situacao } from '../incidents/queue.js';
+import { PortariaPg } from '../portaria/pg.js';
 import type { AlarmEvent } from '../protocols/types.js';
 import {
   ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarCliente, validarEmpresa, validarUsuario,
@@ -33,9 +34,11 @@ const duplicado = (err: unknown) => (err as { code?: string }).code === '23505';
 
 export class PgRepo implements Repositorio {
   private readonly pool: pg.Pool;
+  readonly portaria: PortariaPg;
 
   constructor(connectionString: string) {
     this.pool = new pg.Pool({ connectionString, max: 5 });
+    this.portaria = new PortariaPg(this.pool);
   }
 
   async init(): Promise<void> {

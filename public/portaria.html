@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portaria · Shop Sei Monitoramento</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main class="pagina cadastro">
+  <section>
+    <div class="barra portaria-barra">
+      <select id="condominio" aria-label="Condomínio"></select>
+      <input id="busca" type="search" placeholder="Unidade ou nome (ex.: A 101, Maria)" autocomplete="off" aria-label="Buscar unidade ou pessoa">
+    </div>
+    <div id="instrucoes" class="instrucoes" hidden></div>
+    <div id="unidades"></div>
+  </section>
+  <aside>
+    <form id="form" class="cartao painel">
+      <h2>Registrar atendimento</h2>
+      <div id="unidade-escolhida" class="escolhida mute">Nenhuma unidade escolhida (clique numa unidade ao lado, ou registre sem unidade)</div>
+      <div class="grade">
+        <label>Tipo <select id="tipo">
+          <option value="visitante">Visitante</option><option value="entrega">Entrega</option><option value="prestador">Prestador de serviço</option>
+          <option value="morador">Morador</option><option value="outro">Outro</option>
+        </select></label>
+        <label>Documento <input id="documento" maxlength="30" autocomplete="off"></label>
+      </div>
+      <label>Quem está no portão <input id="visitante" required maxlength="120" autocomplete="off" placeholder="Nome ou empresa"></label>
+      <label>Autorizado por <input id="autorizado" maxlength="120" list="moradores" autocomplete="off" placeholder="Morador que autorizou"></label>
+      <datalist id="moradores"></datalist>
+      <label>Observação <input id="observacao" maxlength="500" autocomplete="off"></label>
+      <div id="msg" class="msg" role="status"></div>
+      <div class="decisoes">
+        <button type="submit" class="principal" data-decisao="liberado">Liberado</button>
+        <button type="submit" class="perigo-cheio" data-decisao="negado">Negado</button>
+        <button type="submit" data-decisao="sem_resposta">Sem resposta</button>
+      </div>
+    </form>
+    <div class="cartao painel-lista">
+      <div class="linha-titulo"><h2>Últimos atendimentos</h2><a id="planilha" class="mute" href="/api/portaria/atendimentos.csv">Baixar planilha</a></div>
+      <div id="historico"></div>
+    </div>
+  </aside>
+</main>
+<script src="/app.js"></script>
+<script>
+const NOMES_TIPO = { morador: 'Morador', autorizado: 'Autorizado', prestador: 'Prestador', proibido: 'NÃO LIBERAR' };
+const NOMES_DECISAO = { liberado: 'Liberado', negado: 'Negado', sem_resposta: 'Sem resposta' };
+let condominios = [], unidades = [], escolhida = null, decisao = 'liberado', confirmarProibido = '';
+
+const semAcento = (t) => (t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+function pessoaEl(p) {
+  const d = el('div', 'pessoa' + (p.tipo === 'proibido' ? ' proibido' : '') + (p.vencido ? ' vencido' : ''));
+  const nome = el('span', 'nome-pessoa', p.nome);
+  const selo = el('span', 'etiqueta tipo-' + p.tipo, NOMES_TIPO[p.tipo] + (p.vencido ? ' · vencido' : p.validoAte ? ' · até ' + p.validoAte.split('-').reverse().join('/') : ''));
+  d.append(nome, selo);
+  if (p.telefone) { const a = el('a', 'tel', p.telefone); a.href = 'tel:' + p.telefone.replace(/[^\d+]/g, ''); d.append(a); }
+  if (p.observacao) d.append(el('div', 'mute obs', p.observacao));
+  return d;
+}
+
+function mostrarUnidades() {
+  const termo = semAcento($('busca').value.trim());
+  const lista = unidades.filter((u) => !termo || semAcento(u.rotulo).includes(termo) || u.pessoas.some((p) => semAcento(p.nome).includes(termo)));
+  if (!condominios.length) return $('unidades').replaceChildren(el('div', 'vazio', 'Nenhum condomínio cadastrado. O administrador cadastra em Condomínios.'));
+  if (!lista.length) return $('unidades').replaceChildren(el('div', 'vazio', termo ? 'Nada encontrado para "' + $('busca').value + '"' : 'Nenhuma unidade cadastrada neste condomínio.'));
+  $('unidades').replaceChildren(...lista.slice(0, 60).map((u) => {
+    const c = el('button', 'cartao unidade' + (escolhida && escolhida.id === u.id ? ' ativa' : ''));
+    c.type = 'button';
+    const topo = el('div', 'linha'); topo.append(el('strong', 'rotulo', u.rotulo));
+    if (u.pessoas.some((p) => p.tipo === 'proibido')) topo.append(el('span', 'etiqueta tipo-proibido', 'Atenção'));
+    c.append(topo);
+    if (u.observacao) c.append(el('div', 'mute obs', u.observacao));
+    if (!u.pessoas.length) c.append(el('div', 'mute', 'Sem pessoas cadastradas'));
+    u.pessoas.forEach((p) => c.append(pessoaEl(p)));
+    c.onclick = () => escolher(u);
+    return c;
+  }));
+  if (lista.length > 60) $('unidades').append(el('div', 'mute', 'Mostrando 60 de ' + lista.length + '. Refine a busca.'));
+}
+
+function escolher(u) {
+  escolhida = escolhida && escolhida.id === u.id ? null : u;
+  const alvo = $('unidade-escolhida');
+  if (!escolhida) { alvo.className = 'escolhida mute'; alvo.textContent = 'Nenhuma unidade escolhida (clique numa unidade ao lado, ou registre sem unidade)'; }
+  else {
+    alvo.className = 'escolhida';
+    alvo.replaceChildren(el('strong', '', 'Unidade ' + u.rotulo));
+    const limpa = el('button', 'mini', 'Trocar'); limpa.type = 'button'; limpa.onclick = () => escolher(u);
+    alvo.append(limpa);
+    if (u.pessoas.some((p) => p.tipo === 'proibido')) alvo.append(el('div', 'aviso', 'Há pessoa marcada como NÃO LIBERAR nesta unidade.'));
+  }
+  $('moradores').replaceChildren(...(escolhida ? escolhida.pessoas.filter((p) => p.tipo !== 'proibido') : []).map((p) => { const o = el('option'); o.value = p.nome; return o; }));
+  mostrarUnidades();
+  $('visitante').focus();
+}
+
+async function carregarHistorico() {
+  const cid = $('condominio').value;
+  if (!cid) return $('historico').replaceChildren();
+  $('planilha').href = '/api/portaria/atendimentos.csv?condominio=' + cid;
+  try {
+    const lista = await api('/api/portaria/atendimentos?limite=15&condominio=' + cid);
+    if (!lista.length) return $('historico').replaceChildren(el('div', 'vazio', 'Nenhum atendimento ainda.'));
+    $('historico').replaceChildren(...lista.map((a) => {
+      const d = el('div', 'atendimento');
+      const l1 = el('div', 'linha');
+      l1.append(el('strong', '', a.visitante), el('span', 'etiqueta decisao-' + a.decisao, NOMES_DECISAO[a.decisao]));
+      const quando = new Date(a.em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      d.append(l1, el('div', 'mute', quando + ' · ' + a.tipo + (a.unidade ? ' · ' + a.unidade : '') + (a.autorizadoPor ? ' · autorizado por ' + a.autorizadoPor : '') + ' · ' + a.operador));
+      if (a.observacao) d.append(el('div', 'mute', a.observacao));
+      return d;
+    }));
+  } catch (e) { $('historico').replaceChildren(el('div', 'msg erro', e.message)); }
+}
+
+async function trocarCondominio() {
+  const cid = $('condominio').value;
+  const c = condominios.find((x) => String(x.id) === cid);
+  $('instrucoes').hidden = !(c && c.instrucoes);
+  $('instrucoes').textContent = c && c.instrucoes ? c.instrucoes : '';
+  try { localStorage.setItem('portaria.condominio', cid); } catch { /* sem armazenamento */ }
+  unidades = cid ? await api('/api/portaria/condominios/' + cid + '/unidades') : [];
+  // Ao trocar de condomínio, a unidade escolhida no anterior deixa de valer.
+  if (escolhida) escolher(escolhida); else mostrarUnidades();
+  carregarHistorico();
+}
+
+document.querySelectorAll('.decisoes button').forEach((b) => b.addEventListener('click', () => { decisao = b.dataset.decisao; }));
+$('form').onsubmit = async (ev) => {
+  ev.preventDefault();
+  if (!$('condominio').value) return mensagem('msg', 'Escolha o condomínio', 'erro');
+  // Liberar alguém com o nome de uma pessoa marcada "não liberar" pede um segundo clique de confirmação.
+  const nome = semAcento($('visitante').value.trim());
+  const barrado = decisao === 'liberado' && nome.length >= 3 && unidades.flatMap((u) => u.pessoas.filter((p) => p.tipo === 'proibido').map((p) => ({ u, p })))
+    .find(({ p }) => semAcento(p.nome).includes(nome) || nome.includes(semAcento(p.nome).split(/[ (]/)[0]));
+  if (barrado && confirmarProibido !== nome) {
+    confirmarProibido = nome;
+    return mensagem('msg', 'Atenção: "' + barrado.p.nome + '" (' + barrado.u.rotulo + ') está marcado como NÃO LIBERAR. Clique em Liberado de novo só se tiver certeza.', 'erro');
+  }
+  confirmarProibido = '';
+  try {
+    await api('/api/portaria/atendimentos', { method: 'POST', body: JSON.stringify({
+      condominioId: Number($('condominio').value), unidadeId: escolhida ? escolhida.id : undefined, tipo: $('tipo').value,
+      visitante: $('visitante').value, documento: $('documento').value, autorizadoPor: $('autorizado').value, observacao: $('observacao').value, decisao,
+    }) });
+    toast('Atendimento registrado: ' + NOMES_DECISAO[decisao]);
+    for (const id of ['visitante', 'documento', 'autorizado', 'observacao']) $(id).value = '';
+    mensagem('msg', '');
+    carregarHistorico();
+  } catch (e) { mensagem('msg', e.message, 'erro'); }
+};
+$('busca').oninput = mostrarUnidades;
+$('condominio').onchange = trocarCondominio;
+
+(async () => {
+  await iniciarTopo('portaria');
+  condominios = (await api('/api/portaria/condominios')).filter((c) => c.ativo);
+  $('condominio').replaceChildren(...condominios.map((c) => { const o = el('option', '', c.nome); o.value = c.id; return o; }));
+  let salvo = null;
+  try { salvo = localStorage.getItem('portaria.condominio'); } catch { /* sem armazenamento */ }
+  if (salvo && condominios.some((c) => String(c.id) === salvo)) $('condominio').value = salvo;
+  await trocarCondominio();
+  $('busca').focus();
+})();
+</script>
+</body>
+</html>

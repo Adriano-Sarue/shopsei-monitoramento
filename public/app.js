@@ -46,8 +46,8 @@ async function iniciarTopo(ativa) {
   // O dono do sistema cuida das empresas; quem é de uma empresa, da operação dela.
   const links = eu.plataforma
     ? [['/empresas.html', 'Empresas', 'empresas'], ['/usuarios.html', 'Donos do sistema', 'usuarios']]
-    : [['/', 'Fila', 'fila'], ['/historico.html', 'Histórico', 'historico']];
-  if (!eu.plataforma && eu.papel === 'admin') links.push(['/clientes.html', 'Clientes', 'clientes'], ['/usuarios.html', 'Usuários', 'usuarios']);
+    : [['/', 'Fila', 'fila'], ['/portaria.html', 'Portaria', 'portaria'], ['/historico.html', 'Histórico', 'historico']];
+  if (!eu.plataforma && eu.papel === 'admin') links.push(['/clientes.html', 'Clientes', 'clientes'], ['/condominios.html', 'Condomínios', 'condominios'], ['/usuarios.html', 'Usuários', 'usuarios']);
   for (const [href, texto, chave] of links) { const a = el('a', chave === ativa ? 'ativo' : '', texto); a.href = href; nav.append(a); }
   const quem = el('div', 'usuario');
   const papel = eu.plataforma ? 'Plataforma' : eu.papel === 'admin' ? 'Administrador' : 'Operador';

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Condomínios · Shop Sei Monitoramento</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main class="pagina cadastro">
+  <section>
+    <h1 style="font-size:20px;margin-bottom:12px">Condomínios</h1>
+    <div id="lista"></div>
+    <div id="detalhe" hidden>
+      <div class="linha-titulo" style="margin-top:18px">
+        <h2 id="titulo-unidades" style="font-size:17px">Unidades</h2>
+        <div style="display:flex;gap:6px"><button type="button" id="nova-unidade" class="marca-btn">+ Unidade</button><button type="button" id="importar">Importar do Excel</button></div>
+      </div>
+      <input id="filtro" type="search" placeholder="Filtrar por unidade ou nome" style="margin:10px 0" autocomplete="off">
+      <div id="unidades"></div>
+    </div>
+  </section>
+  <form id="form" class="cartao painel">
+    <h2 id="titulo">Novo condomínio</h2>
+    <label>Nome <input id="nome" required maxlength="120"></label>
+    <label>Endereço <input id="endereco" maxlength="200"></label>
+    <label>Instruções para o operador <textarea id="instrucoes" rows="5" maxlength="2000" placeholder="Ex.: entregas ficam na portaria; mudança só com autorização do síndico; prestadores das 8h às 17h."></textarea></label>
+    <div id="msg" class="msg" role="status"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="marca-btn" type="submit">Salvar</button><button type="button" id="limpar">Novo</button><button type="button" id="ativar" hidden></button></div>
+  </form>
+</main>
+<script src="/app.js"></script>
+<script>
+const NOMES_TIPO = { morador: 'Morador', autorizado: 'Autorizado', prestador: 'Prestador', proibido: 'Não liberar' };
+let condominios = [], atual = null, unidades = [];
+const semAcento = (t) => (t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+function limpar() {
+  atual = null; $('titulo').textContent = 'Novo condomínio';
+  for (const id of ['nome', 'endereco', 'instrucoes']) $(id).value = '';
+  $('ativar').hidden = true; $('detalhe').hidden = true; mensagem('msg', '');
+  desenharLista();
+}
+
+async function abrir(c) {
+  atual = c; $('titulo').textContent = 'Editar ' + c.nome;
+  $('nome').value = c.nome; $('endereco').value = c.endereco || ''; $('instrucoes').value = c.instrucoes || '';
+  $('ativar').hidden = false; $('ativar').textContent = c.ativo ? 'Desativar' : 'Reativar'; $('ativar').className = c.ativo ? 'perigo' : '';
+  $('detalhe').hidden = false; $('titulo-unidades').textContent = 'Unidades de ' + c.nome;
+  mensagem('msg', '');
+  desenharLista();
+  await carregarUnidades();
+}
+
+function desenharLista() {
+  if (!condominios.length) return $('lista').replaceChildren(el('div', 'vazio', 'Nenhum condomínio ainda. Cadastre o primeiro ao lado.'));
+  $('lista').replaceChildren(...condominios.map((c) => {
+    const d = el('div', 'cartao item' + (c.ativo ? '' : ' inativo') + (atual && atual.id === c.id ? ' selecionado' : ''));
+    const t = el('div'); t.append(el('strong', '', c.nome), el('div', 'mute', (c.endereco ? c.endereco + ' · ' : '') + c.unidades + (c.unidades === 1 ? ' unidade' : ' unidades') + (c.ativo ? '' : ' · desativado')));
+    const b = el('button', '', 'Abrir'); b.onclick = () => abrir(c);
+    d.append(t, b); return d;
+  }));
+}
+
+async function carregarCondominios() {
+  condominios = await api('/api/portaria/condominios');
+  if (atual) atual = condominios.find((c) => c.id === atual.id) || null;
+  desenharLista();
+}
+
+async function carregarUnidades() {
+  unidades = await api('/api/portaria/condominios/' + atual.id + '/unidades');
+  desenharUnidades();
+}
+
+function desenharUnidades() {
+  const termo = semAcento($('filtro').value.trim());
+  const lista = unidades.filter((u) => !termo || semAcento(u.rotulo).includes(termo) || u.pessoas.some((p) => semAcento(p.nome).includes(termo)));
+  if (!lista.length) return $('unidades').replaceChildren(el('div', 'vazio', unidades.length ? 'Nada encontrado.' : 'Nenhuma unidade. Use + Unidade ou importe a lista do Excel.'));
+  $('unidades').replaceChildren(...lista.map((u) => {
+    const d = el('div', 'cartao item');
+    const t = el('div');
+    t.append(el('strong', '', u.rotulo));
+    const ps = el('div', 'mute');
+    ps.textContent = u.pessoas.length ? u.pessoas.map((p) => p.nome + (p.tipo !== 'morador' ? ' (' + NOMES_TIPO[p.tipo].toLowerCase() + (p.vencido ? ', vencido' : '') + ')' : '')).join(', ') : 'Sem pessoas';
+    t.append(ps);
+    const b = el('div'); b.style.display = 'flex'; b.style.gap = '6px';
+    const e = el('button', '', 'Editar'); e.onclick = () => editarUnidade(u);
+    b.append(e);
+    d.append(t, b); return d;
+  }));
+}
+
+function linhaPessoa(corpo, p = { nome: '', tipo: 'morador' }) {
+  const d = el('div', 'pessoa-form');
+  const campo = (cls, valor, ph, tipo = 'text') => { const i = el('input', cls); i.value = valor || ''; i.placeholder = ph; i.type = tipo; i.setAttribute('aria-label', ph); return i; };
+  const nome = campo('', p.nome, 'Nome');
+  const tipo = el('select'); tipo.setAttribute('aria-label', 'Tipo');
+  for (const [v, t] of Object.entries(NOMES_TIPO)) { const o = el('option', '', t); o.value = v; tipo.append(o); }
+  tipo.value = p.tipo;
+  const tel = campo('', p.telefone, 'Telefone', 'tel');
+  const doc = campo('', p.documento, 'Documento');
+  const val = campo('', p.validoAte, 'Válido até', 'date'); val.title = 'Válido até (deixe vazio para sem prazo)';
+  const obs = campo('largo', p.observacao, 'Observação');
+  const tira = el('button', 'mini perigo', 'Tirar'); tira.type = 'button'; tira.onclick = () => d.remove();
+  d.append(nome, tipo, tel, doc, val, obs, tira);
+  d.ler = () => ({ nome: nome.value, tipo: tipo.value, telefone: tel.value || undefined, documento: doc.value || undefined, validoAte: val.value || undefined, observacao: obs.value || undefined });
+  corpo.append(d);
+}
+
+function editarUnidade(u) {
+  const dlg = el('dialog', 'largo');
+  const form = el('form');
+  form.append(el('h3', '', u ? 'Unidade ' + u.rotulo : 'Nova unidade'));
+  const grade = el('div', 'grade');
+  const campo = (rotulo, valor, req) => { const l = el('label', '', rotulo); const i = el('input'); i.value = valor || ''; i.required = !!req; i.maxLength = 20; l.append(i); grade.append(l); return i; };
+  const bloco = campo('Bloco / torre (opcional)', u && u.bloco);
+  const numero = campo('Número', u && u.numero, true);
+  form.append(grade);
+  const lo = el('label', '', 'Observação da unidade'); const obs = el('input'); obs.maxLength = 300; obs.value = (u && u.observacao) || ''; lo.append(obs); form.append(lo);
+  form.append(el('div', 'rotulo-secao', 'Pessoas'), el('p', 'mute', 'Morador e autorizado entram; prestador segue a regra do condomínio; "Não liberar" aparece em vermelho para o operador.'));
+  const corpo = el('div'); form.append(corpo);
+  (u ? u.pessoas : []).forEach((p) => linhaPessoa(corpo, p));
+  if (!u) linhaPessoa(corpo);
+  const mais = el('button', '', '+ Pessoa'); mais.type = 'button'; mais.onclick = () => linhaPessoa(corpo); form.append(mais);
+  const erro = el('div', 'msg erro');
+  const botoes = el('div', 'botoes');
+  if (u) {
+    const apagar = el('button', 'perigo', 'Apagar unidade'); apagar.type = 'button'; apagar.style.marginRight = 'auto';
+    apagar.onclick = async () => {
+      if (apagar.dataset.confirmar !== '1') { apagar.dataset.confirmar = '1'; apagar.textContent = 'Confirmar: apagar ' + u.rotulo; return; }
+      try { await api('/api/portaria/condominios/' + atual.id + '/unidades/' + u.id, { method: 'DELETE', body: '{}' }); dlg.close(); toast('Unidade apagada'); carregarUnidades(); carregarCondominios(); } catch (e) { erro.textContent = e.message; }
+    };
+    botoes.append(apagar);
+  }
+  const cancelar = el('button', '', 'Cancelar'); cancelar.type = 'button'; cancelar.onclick = () => dlg.close();
+  const ok = el('button', 'marca-btn', 'Salvar'); ok.type = 'submit';
+  botoes.append(cancelar, ok);
+  form.append(erro, botoes);
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const corpoReq = JSON.stringify({ bloco: bloco.value, numero: numero.value, observacao: obs.value, pessoas: [...corpo.children].map((x) => x.ler()) });
+    try {
+      if (u) await api('/api/portaria/condominios/' + atual.id + '/unidades/' + u.id, { method: 'PUT', body: corpoReq });
+      else await api('/api/portaria/condominios/' + atual.id + '/unidades', { method: 'POST', body: corpoReq });
+      dlg.close(); toast('Unidade salva'); carregarUnidades(); carregarCondominios();
+    } catch (e) { erro.textContent = e.message; }
+  };
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.append(form); document.body.append(dlg); dlg.showModal();
+}
+
+function importar() {
+  const dlg = el('dialog', 'largo');
+  const form = el('form');
+  form.append(el('h3', '', 'Importar unidades e pessoas'), el('p', 'mute', 'Copie do Excel e cole abaixo, uma pessoa por linha, nas colunas: bloco, número, nome, telefone, tipo (morador, autorizado, prestador ou proibido). Unidades novas são criadas e as existentes ganham só as pessoas que ainda não têm. Nada é apagado.'));
+  const area = el('textarea'); area.rows = 10; area.placeholder = 'A\t101\tMaria Silva\t(14) 99999-0000\tmorador\nA\t101\tJoão Silva\t\tmorador\nB\t202\tPedro\t\tautorizado';
+  form.append(area);
+  const erro = el('div', 'msg erro');
+  const botoes = el('div', 'botoes');
+  const cancelar = el('button', '', 'Cancelar'); cancelar.type = 'button'; cancelar.onclick = () => dlg.close();
+  const ok = el('button', 'marca-btn', 'Importar'); ok.type = 'submit';
+  botoes.append(cancelar, ok);
+  form.append(erro, botoes);
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    try {
+      const r = await api('/api/portaria/condominios/' + atual.id + '/importar', { method: 'POST', body: JSON.stringify({ texto: area.value }) });
+      dlg.close(); toast(r.criadas + ' unidades criadas, ' + r.atualizadas + ' atualizadas, ' + r.pessoas + ' pessoas'); carregarUnidades(); carregarCondominios();
+    } catch (e) { erro.textContent = e.message; }
+  };
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.append(form); document.body.append(dlg); dlg.showModal();
+}
+
+$('form').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const corpo = JSON.stringify({ nome: $('nome').value, endereco: $('endereco').value, instrucoes: $('instrucoes').value });
+  try {
+    const c = atual
+      ? await api('/api/portaria/condominios/' + atual.id, { method: 'PUT', body: corpo })
+      : await api('/api/portaria/condominios', { method: 'POST', body: corpo });
+    toast('Condomínio salvo');
+    await carregarCondominios();
+    abrir(condominios.find((x) => x.id === c.id));
+  } catch (e) { mensagem('msg', e.message, 'erro'); }
+};
+$('ativar').onclick = async () => {
+  try {
+    await api('/api/portaria/condominios/' + atual.id, { method: 'PUT', body: JSON.stringify({ nome: atual.nome, endereco: atual.endereco, instrucoes: atual.instrucoes, ativo: !atual.ativo }) });
+    await carregarCondominios(); abrir(atual);
+  } catch (e) { mensagem('msg', e.message, 'erro'); }
+};
+$('limpar').onclick = limpar;
+$('nova-unidade').onclick = () => editarUnidade(null);
+$('importar').onclick = importar;
+$('filtro').oninput = desenharUnidades;
+(async () => { await iniciarTopo('condominios'); await carregarCondominios(); limpar(); })();
+</script>
+</body>
+</html>

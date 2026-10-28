@@ -7,6 +7,7 @@ import type { Ocorrencia } from '../incidents/queue.js';
 import type { Central } from '../central.js';
 import { conferirSenha, hashSenha, SENHA_MINIMA } from '../auth/senha.js';
 import { Sessoes, type Sessao } from '../auth/sessoes.js';
+import { lerImportacao, pessoaValida, rotuloUnidade, UnidadeDuplicadaError, type NovaUnidade, type NovoAtendimento, type Pessoa } from '../portaria/tipos.js';
 import {
   ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError,
   type Cliente, type NovoCliente, type Papel, type Repositorio, type Rota, type Usuario,
@@ -111,6 +112,8 @@ const PAGINAS: Record<string, { arquivo: string; tipo: string; publica?: boolean
   '/index.html': { arquivo: 'index.html', tipo: 'text/html', empresa: true },
   '/clientes.html': { arquivo: 'clientes.html', tipo: 'text/html', empresa: true, admin: true },
   '/historico.html': { arquivo: 'historico.html', tipo: 'text/html', empresa: true },
+  '/portaria.html': { arquivo: 'portaria.html', tipo: 'text/html', empresa: true },
+  '/condominios.html': { arquivo: 'condominios.html', tipo: 'text/html', empresa: true, admin: true },
   '/usuarios.html': { arquivo: 'usuarios.html', tipo: 'text/html', admin: true },
   '/empresas.html': { arquivo: 'empresas.html', tipo: 'text/html', plataforma: true },
   '/login.html': { arquivo: 'login.html', tipo: 'text/html', publica: true },
@@ -143,6 +146,28 @@ class HttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
   }
+}
+
+// Planilha para o Excel (ponto e vírgula, BOM para acentos). Célula começando com = + - @ viraria fórmula:
+// um apóstrofo na frente impede.
+function csv<K extends string>(cab: readonly K[], linhas: Partial<Record<K, unknown>>[]): string {
+  const cel = (v: unknown) => {
+    let t = v === null || v === undefined ? '' : String(v);
+    if (/^[=+\-@]/.test(t)) t = `'${t}`;
+    return /[",;\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  return '\ufeff' + [cab.join(';'), ...linhas.map((l) => cab.map((c) => cel(l[c])).join(';'))].join('\r\n') + '\r\n';
+}
+
+// Data e hora de Brasília para planilhas (o Excel não entende o formato ISO).
+const dataHoraBr = (d: Date | undefined | null) => (d ? d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }).replace(',', '') : '');
+
+// Data de filtro: "AAAA-MM-DD" vale o dia inteiro (início em "de", fim em "até").
+function dataFiltro(v: string | null, fim: boolean): Date | undefined {
+  if (!v) return undefined;
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T${fim ? '23:59:59.999' : '00:00:00'}` : v);
+  if (Number.isNaN(d.getTime())) throw new Error('Data inválida');
+  return d;
 }
 
 function text(v: unknown, campo: string): string {
@@ -184,6 +209,99 @@ export function createApi(central: Central, opts: ApiOptions): Server {
   // Tira da escala quem não tem mais sessão nenhuma aberta.
   const desconectar = (empresaId: number | null, nome: string) => {
     if (empresaId !== null && central.empresa(empresaId) && !sessoes.temSessao(empresaId, nome)) central.fila(empresaId).desconectar(nome);
+  };
+
+  // ---- Portaria remota: condomínios e unidades (o administrador cadastra) e atendimentos (o operador registra).
+  const portaria = async (req: IncomingMessage, res: ServerResponse, url: URL, q: Quem, eid: number): Promise<void> => {
+    const p = repo.portaria;
+    const partes = url.pathname.split('/').slice(3); // condominios, :id, unidades | importar, :uid
+    const num = (v: string | undefined) => (v && /^\d+$/.test(v) ? Number(v) : NaN);
+    const opcional = (v: unknown) => (typeof v === 'string' ? v : undefined);
+    if (partes[0] === 'condominios') {
+      const cid = num(partes[1]);
+      if (partes.length === 1 && req.method === 'GET') return send(res, 200, await p.listarCondominios(eid));
+      if (partes.length === 1 && req.method === 'POST') {
+        exigirAdmin(q);
+        const b = await readJson(req);
+        return send(res, 201, await p.criarCondominio(eid, { nome: String(b.nome ?? ''), endereco: opcional(b.endereco), instrucoes: opcional(b.instrucoes) }));
+      }
+      if (partes.length === 2 && !Number.isNaN(cid) && req.method === 'PUT') {
+        exigirAdmin(q);
+        const b = await readJson(req);
+        return send(res, 200, await p.atualizarCondominio(eid, cid, {
+          nome: String(b.nome ?? ''), endereco: opcional(b.endereco), instrucoes: opcional(b.instrucoes), ativo: typeof b.ativo === 'boolean' ? b.ativo : undefined,
+        }));
+      }
+      if (partes[2] === 'unidades' && !Number.isNaN(cid)) {
+        if (partes.length === 3 && req.method === 'GET') {
+          // Quem está com a validade vencida vai marcado: o operador confirma com o morador antes de liberar.
+          const hoje = new Date();
+          const us = await p.listarUnidades(eid, cid);
+          return send(res, 200, us.map((u) => ({ ...u, rotulo: rotuloUnidade(u), pessoas: u.pessoas.map((x) => ({ ...x, vencido: !pessoaValida(x, hoje) })) })));
+        }
+        exigirAdmin(q);
+        const entrada = (b: Record<string, unknown>): NovaUnidade => ({
+          bloco: opcional(b.bloco), numero: String(b.numero ?? ''), observacao: opcional(b.observacao),
+          pessoas: Array.isArray(b.pessoas) ? (b.pessoas as Pessoa[]) : [],
+        });
+        if (partes.length === 3 && req.method === 'POST') return send(res, 201, await p.salvarUnidade(eid, cid, entrada(await readJson(req))));
+        const uid = num(partes[3]);
+        if (partes.length === 4 && !Number.isNaN(uid) && req.method === 'PUT') return send(res, 200, await p.salvarUnidade(eid, cid, { ...entrada(await readJson(req)), id: uid }));
+        if (partes.length === 4 && !Number.isNaN(uid) && req.method === 'DELETE') {
+          await p.removerUnidade(eid, cid, uid);
+          return send(res, 200, { ok: true });
+        }
+      }
+      if (partes[2] === 'importar' && partes.length === 3 && !Number.isNaN(cid) && req.method === 'POST') {
+        // Unidade nova é criada; a que já existe ganha as pessoas que ainda não tem (pelo nome). Ninguém é apagado.
+        exigirAdmin(q);
+        const novas = lerImportacao(String((await readJson(req)).texto ?? ''));
+        const atuais = await p.listarUnidades(eid, cid);
+        let criadas = 0, atualizadas = 0, pessoas = 0;
+        for (const n of novas) {
+          const u = atuais.find((x) => (x.bloco ?? '') === (n.bloco ?? '') && x.numero === n.numero);
+          if (!u) {
+            await p.salvarUnidade(eid, cid, n);
+            criadas++;
+            pessoas += n.pessoas.length;
+            continue;
+          }
+          const faltam = n.pessoas.filter((x) => !u.pessoas.some((y) => y.nome.toLowerCase() === x.nome.toLowerCase()));
+          if (!faltam.length) continue;
+          await p.salvarUnidade(eid, cid, { ...u, pessoas: [...u.pessoas, ...faltam] });
+          atualizadas++;
+          pessoas += faltam.length;
+        }
+        return send(res, 200, { criadas, atualizadas, pessoas });
+      }
+    }
+    if (partes.length === 1 && partes[0] === 'atendimentos' && req.method === 'POST') {
+      const b = await readJson(req);
+      const a: NovoAtendimento = {
+        condominioId: Number(b.condominioId),
+        unidadeId: b.unidadeId === undefined || b.unidadeId === null || b.unidadeId === '' ? undefined : Number(b.unidadeId),
+        tipo: b.tipo as NovoAtendimento['tipo'], visitante: String(b.visitante ?? ''), decisao: b.decisao as NovoAtendimento['decisao'],
+        documento: opcional(b.documento), autorizadoPor: opcional(b.autorizadoPor), observacao: opcional(b.observacao),
+      };
+      return send(res, 201, await p.registrarAtendimento(eid, a, q.nome ?? text(b.operador, 'operador'), new Date()));
+    }
+    if (partes.length === 1 && (partes[0] === 'atendimentos' || partes[0] === 'atendimentos.csv') && req.method === 'GET') {
+      const ehCsv = partes[0].endsWith('.csv');
+      const cond = url.searchParams.get('condominio');
+      const lista = await p.listarAtendimentos(eid, {
+        condominioId: cond ? Number(cond) || undefined : undefined,
+        de: dataFiltro(url.searchParams.get('de'), false),
+        ate: dataFiltro(url.searchParams.get('ate'), true),
+        limite: Math.min(Math.max(Number(url.searchParams.get('limite')) || 200, 1), ehCsv ? 5000 : 500),
+      });
+      const nomes = new Map((await p.listarCondominios(eid)).map((c) => [c.id, c.nome]));
+      const linhas = lista.map((a) => ({ ...a, em: a.em.toISOString(), condominio: nomes.get(a.condominioId) ?? '' }));
+      if (!ehCsv) return send(res, 200, linhas);
+      const cab = ['id', 'em', 'condominio', 'unidade', 'tipo', 'visitante', 'documento', 'decisao', 'autorizadoPor', 'operador', 'observacao'] as const;
+      const planilha = lista.map((a, i) => ({ ...linhas[i]!, em: dataHoraBr(a.em) }));
+      return send(res, 200, csv(cab, planilha), 'text/csv', { 'content-disposition': 'attachment; filename="portaria.csv"' });
+    }
+    send(res, 404, { erro: 'Não encontrado' });
   };
 
   return createServer(async (req, res) => {
@@ -337,34 +455,22 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         return send(res, 200, { agora: new Date().toISOString(), iniciadoEm: INICIO.toISOString(), ultimoEventoEm: ultimo?.toISOString() ?? null });
       }
       if (req.method === 'GET' && (url.pathname === '/api/historico' || url.pathname === '/api/historico.csv')) {
-        const data = (v: string | null, fim: boolean): Date | undefined => {
-          if (!v) return undefined;
-          const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T${fim ? '23:59:59.999' : '00:00:00'}` : v);
-          if (Number.isNaN(d.getTime())) throw new Error('Data inválida');
-          return d;
-        };
-        const csv = url.pathname.endsWith('.csv');
+        const ehCsv = url.pathname.endsWith('.csv');
         const lista = await repo.listarEncerradas(eid, {
           conta: url.searchParams.get('conta')?.trim().toUpperCase() || undefined,
-          de: data(url.searchParams.get('de'), false),
-          ate: data(url.searchParams.get('ate'), true),
-          limite: Math.min(Math.max(Number(url.searchParams.get('limite')) || 200, 1), csv ? 5000 : 500),
+          de: dataFiltro(url.searchParams.get('de'), false),
+          ate: dataFiltro(url.searchParams.get('ate'), true),
+          limite: Math.min(Math.max(Number(url.searchParams.get('limite')) || 200, 1), ehCsv ? 5000 : 500),
         });
         const linhas = lista.map((o) => ({
           id: o.id, conta: o.conta, cliente: clientes.porConta(o.conta)?.nome ?? null, prioridade: o.prioridade,
           abertaEm: o.abertaEm.toISOString(), encerradaEm: o.encerradaEm?.toISOString() ?? null, operador: o.operador ?? null,
           motivo: o.motivo ?? null, conclusao: o.conclusao ?? null, resumo: o.eventos[0]?.description ?? '', eventos: o.eventos.length,
         }));
-        if (!csv) return send(res, 200, linhas);
-        // Célula começando com = + - @ vira fórmula no Excel: um apóstrofo na frente impede.
-        const cel = (v: unknown) => {
-          let t = v === null || v === undefined ? '' : String(v);
-          if (/^[=+\-@]/.test(t)) t = `'${t}`;
-          return /[",;\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-        };
+        if (!ehCsv) return send(res, 200, linhas);
         const cab = ['id', 'conta', 'cliente', 'prioridade', 'abertaEm', 'encerradaEm', 'operador', 'motivo', 'conclusao', 'resumo', 'eventos'] as const;
-        const texto = '﻿' + [cab.join(';'), ...linhas.map((l) => cab.map((c) => cel(l[c])).join(';'))].join('\r\n') + '\r\n';
-        return send(res, 200, texto, 'text/csv', { 'content-disposition': 'attachment; filename="historico.csv"' });
+        const planilha = lista.map((o, i) => ({ ...linhas[i]!, abertaEm: dataHoraBr(o.abertaEm), encerradaEm: dataHoraBr(o.encerradaEm) }));
+        return send(res, 200, csv(cab, planilha), 'text/csv', { 'content-disposition': 'attachment; filename="historico.csv"' });
       }
 
       if (req.method === 'GET' && url.pathname === '/api/ocorrencias') {
@@ -431,10 +537,11 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         await clientes.refresh();
         return send(res, req.method === 'POST' ? 201 : 200, cliente);
       }
+      if (url.pathname.startsWith('/api/portaria/')) return await portaria(req, res, url, q, eid);
       send(res, 404, { erro: 'Não encontrado' });
     } catch (err) {
       if (err instanceof HttpError) return send(res, err.status, { erro: err.message });
-      if (err instanceof ContaDuplicadaError || err instanceof LoginDuplicadoError || err instanceof RotaDuplicadaError) return send(res, 409, { erro: err.message });
+      if (err instanceof ContaDuplicadaError || err instanceof LoginDuplicadoError || err instanceof RotaDuplicadaError || err instanceof UnidadeDuplicadaError) return send(res, 409, { erro: err.message });
       if (err instanceof NaoEncontradoError) return send(res, 404, { erro: err.message });
       if (err instanceof SyntaxError) return send(res, 400, { erro: 'JSON inválido' });
       send(res, 400, { erro: (err as Error).message });

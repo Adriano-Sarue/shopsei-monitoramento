@@ -1,4 +1,5 @@
 import type { Ocorrencia } from '../incidents/queue.js';
+import { PortariaMemoria } from '../portaria/memoria.js';
 import type { AlarmEvent } from '../protocols/types.js';
 import {
   ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarCliente, validarEmpresa, validarUsuario,
@@ -10,6 +11,7 @@ type ClienteGuardado = Cliente & { empresaId: number };
 // Implementação em memória: usada nos testes e para rodar sem banco (nada sobrevive ao reinício).
 export class MemoryRepo implements Repositorio {
   readonly eventos: AlarmEvent[] = [];
+  readonly portaria = new PortariaMemoria();
   private readonly ocorrencias = new Map<number, Ocorrencia>();
   private readonly clientes: ClienteGuardado[] = [];
   private readonly usuarios: Usuario[] = [];
