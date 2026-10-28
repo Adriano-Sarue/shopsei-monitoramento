@@ -1,0 +1,74 @@
+# Sistema completo num servidor: aplicação, PostgreSQL, HTTPS automático (Caddy) e backup diário.
+# Uso: copie .env.example para .env, preencha e rode `docker compose up -d` nesta pasta.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: shopsei
+      POSTGRES_USER: shopsei
+      POSTGRES_PASSWORD: ${BANCO_SENHA:?defina BANCO_SENHA no .env}
+    volumes:
+      - banco:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopsei -d shopsei"]
+      interval: 10s
+      retries: 10
+
+  app:
+    build: ..
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://shopsei:${BANCO_SENHA}@db:5432/shopsei
+      ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
+      ADMIN_SENHA: ${ADMIN_SENHA:?defina ADMIN_SENHA no .env}
+      SURGARD_TCP_PORTA: ${SURGARD_TCP_PORTA:-}
+      CONFIAR_PROXY: "1"
+      TZ: America/Sao_Paulo
+    ports:
+      # Centrais (SIA DC-09). O console só é acessado pelo Caddy, nunca direto.
+      - "9000:9000/tcp"
+      - "9000:9000/udp"
+      # Feed Sur-Gard vindo da ponte do PC da empresa. Libere no firewall só para o IP da empresa.
+      - "${SURGARD_PORTA_PUBLICA:-9200}:${SURGARD_TCP_PORTA:-9200}/tcp"
+    volumes:
+      - dados:/app/data
+      - ./config:/app/config:ro
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      DOMINIO: ${DOMINIO:?defina DOMINIO no .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_dados:/data
+      - caddy_config:/config
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${BANCO_SENHA}
+      DIAS: ${BACKUP_DIAS:-30}
+      TZ: America/Sao_Paulo
+    volumes:
+      - ./backups:/backups
+    # Uma cópia por dia (a primeira 2 min depois de subir), apagando as mais antigas que DIAS.
+    entrypoint: ["/bin/sh", "-c", "sleep 120; while true; do f=/backups/shopsei-$$(date +%F-%H%M).sql.gz; pg_dump -h db -U shopsei shopsei | gzip > $$f.tmp && mv $$f.tmp $$f && echo backup $$f; find /backups -name 'shopsei-*.sql.gz' -mtime +$$DIAS -delete; sleep 86400; done"]
+
+volumes:
+  banco:
+  dados:
+  caddy_dados:
+  caddy_config:

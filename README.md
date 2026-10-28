@@ -96,7 +96,9 @@ npm run simular -- --conta 1234 --protocolo NULL                       # supervi
 Variáveis de ambiente: `RECEPTORA_TCP_PORTA`, `RECEPTORA_UDP_PORTA` (padrão 9000),
 `DATABASE_URL`, `ADMIN_LOGIN`, `ADMIN_SENHA`, `SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
 
-Com Docker:
+Para colocar no ar num servidor (com banco, HTTPS e backup), siga [deploy/LEIAME.md](deploy/LEIAME.md).
+
+Só a aplicação, com Docker:
 
 ```bash
 docker build -t shopsei-receptora .

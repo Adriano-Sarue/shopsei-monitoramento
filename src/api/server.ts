@@ -64,6 +64,13 @@ function tokenOk(req: IncomingMessage, token: string | undefined): boolean {
 }
 
 const COOKIE = 'shopsei_sessao';
+
+// Atrás do Caddy (CONFIAR_PROXY=1) o IP real vem no X-Forwarded-For; sem proxy esse cabeçalho é ignorado,
+// porque qualquer um poderia inventá-lo para escapar do limite de tentativas.
+function clienteIp(req: IncomingMessage): string {
+  const xff = process.env.CONFIAR_PROXY === '1' ? String(req.headers['x-forwarded-for'] ?? '').split(',').pop()?.trim() : '';
+  return xff || req.socket.remoteAddress || '?';
+}
 const INICIO = new Date();
 
 function cookieDe(req: IncomingMessage): string | undefined {
@@ -75,7 +82,7 @@ function cookieDe(req: IncomingMessage): string | undefined {
 }
 
 function cookieSessao(req: IncomingMessage, token: string, maxAge: number): string {
-  const seguro = req.headers['x-forwarded-proto'] === 'https' || process.env.COOKIE_SEGURO === '1';
+  const seguro = (process.env.CONFIAR_PROXY === '1' && req.headers['x-forwarded-proto'] === 'https') || process.env.COOKIE_SEGURO === '1';
   return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${seguro ? '; Secure' : ''}`;
 }
 
@@ -147,6 +154,7 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
         const html = await readFile(join(opts.publicDir, pagina.arquivo), 'utf8');
         return send(res, 200, html, pagina.tipo, pagina.publica ? {} : { 'cache-control': 'no-store' });
       }
+      if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: true });
       if (!url.pathname.startsWith('/api/')) return send(res, 404, { erro: 'Não encontrado' });
 
       // Chamadas que mudam algo só valem como JSON: formulários de outros sites não conseguem enviá-las.
@@ -158,7 +166,7 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
         if (!opts.repo) return send(res, 501, { erro: 'Login não está ligado' });
         const body = await readJson(req);
         const login = String(body.login ?? '').trim().toLowerCase();
-        const ip = `ip|${req.headers['x-forwarded-for'] ?? req.socket.remoteAddress}`;
+        const ip = `ip|${clienteIp(req)}`;
         const chave = `${login}|${ip}`;
         if (sessoes.bloqueado(chave) || sessoes.bloqueado(ip, 25)) return send(res, 429, { erro: 'Muitas tentativas. Aguarde alguns minutos.' });
         const u = await opts.repo.buscarUsuario(login);

@@ -3,3 +3,6 @@ dist/
 data/
 .env
 config/accounts.json
+deploy/.env
+deploy/backups/
+deploy/config/accounts.json

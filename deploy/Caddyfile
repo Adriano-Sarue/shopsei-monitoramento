@@ -1,0 +1,9 @@
+# HTTPS automático (Let's Encrypt) para o domínio do console.
+{$DOMINIO} {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		Referrer-Policy "same-origin"
+	}
+	reverse_proxy app:8090
+}
