@@ -1,0 +1,56 @@
+import type { Ocorrencia } from '../incidents/queue.js';
+import type { AlarmEvent } from '../protocols/types.js';
+import { ContaDuplicadaError, validarCliente, type Cliente, type NovoCliente, type Repositorio } from './repositorio.js';
+
+// Implementação em memória: usada nos testes e para rodar sem banco (nada sobrevive ao reinício).
+export class MemoryRepo implements Repositorio {
+  readonly eventos: AlarmEvent[] = [];
+  private readonly ocorrencias = new Map<number, Ocorrencia>();
+  private readonly clientes: Cliente[] = [];
+  private nextId = 1;
+
+  async init(): Promise<void> {}
+
+  async salvarEvento(e: AlarmEvent): Promise<void> {
+    this.eventos.push(e);
+  }
+
+  async salvarOcorrencia(o: Ocorrencia): Promise<void> {
+    this.ocorrencias.set(o.id, structuredClone(o));
+  }
+
+  async carregarOcorrenciasAbertas(): Promise<Ocorrencia[]> {
+    return [...this.ocorrencias.values()].filter((o) => o.situacao !== 'encerrada').map((o) => structuredClone(o));
+  }
+
+  async listarClientes(): Promise<Cliente[]> {
+    return structuredClone(this.clientes);
+  }
+
+  private checarContas(contas: string[], exceto?: number): void {
+    for (const conta of contas) {
+      if (this.clientes.some((c) => c.id !== exceto && c.contas.includes(conta))) {
+        throw new ContaDuplicadaError(`A conta ${conta} já pertence a outro cliente`);
+      }
+    }
+  }
+
+  async criarCliente(entrada: NovoCliente): Promise<Cliente> {
+    const c = validarCliente(entrada);
+    this.checarContas(c.contas);
+    const cliente: Cliente = { ...c, id: this.nextId++, ativo: true };
+    this.clientes.push(cliente);
+    return structuredClone(cliente);
+  }
+
+  async atualizarCliente(id: number, entrada: NovoCliente): Promise<Cliente> {
+    const c = validarCliente(entrada);
+    const i = this.clientes.findIndex((x) => x.id === id);
+    if (i < 0) throw new Error(`Cliente ${id} não existe`);
+    this.checarContas(c.contas, id);
+    this.clientes[i] = { ...c, id, ativo: this.clientes[i]!.ativo };
+    return structuredClone(this.clientes[i]!);
+  }
+
+  async fechar(): Promise<void> {}
+}

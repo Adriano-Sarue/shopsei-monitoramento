@@ -20,6 +20,8 @@
   .card.p1 { border-left-color:var(--p1); } .card.p2 { border-left-color:var(--p2); } .card.p3 { border-left-color:var(--p3); }
   .card .top { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
   .mute { color:var(--mute); font-size:13px; }
+  .chave { font-weight:600; font-size:13px; margin-top:4px; }
+  a { color:inherit; }
   .warn { color:var(--p1); font-weight:600; font-size:13px; }
   .acoes { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
   #erro { color:var(--p1); padding:0 16px; min-height:20px; }
@@ -28,6 +30,7 @@
 <body>
 <header>
   <h1>Shop Sei Monitoramento</h1>
+  <a href="/clientes.html">Clientes</a>
   <label>Token <input id="token" type="password" size="12"></label>
   <label>Operador <input id="operador" size="10"></label>
   <button id="disp" class="main">Ficar disponível</button>
@@ -56,9 +59,14 @@ function hora(iso) { return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2
 function card(o) {
   const c = el('div', 'card p' + Math.min(o.prioridade, 4));
   const top = el('div', 'top');
-  top.append(el('span', '', 'Conta ' + o.conta), el('span', 'mute', hora(o.abertaEm)));
+  top.append(el('span', '', 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '')), el('span', 'mute', hora(o.abertaEm)));
   c.append(top, el('div', '', o.resumo));
   if (!o.contaCadastrada) c.append(el('div', 'warn', 'Conta não cadastrada'));
+  if (o.cliente && o.cliente.endereco) c.append(el('div', 'mute', o.cliente.endereco));
+  if (o.cliente && o.situacao === 'em_atendimento') {
+    if (o.cliente.palavraChave || o.cliente.contraSenha) c.append(el('div', 'chave', 'Palavra-chave: ' + (o.cliente.palavraChave || '-') + ' · Contra-senha: ' + (o.cliente.contraSenha || '-')));
+    for (const ct of o.cliente.contatos) c.append(el('div', 'mute', ct.ordem + '. ' + ct.nome + (ct.telefone ? ' · ' + ct.telefone : '')));
+  }
   for (const e of o.eventos.slice(-4)) c.append(el('div', 'mute', hora(e.em) + ' · ' + e.codigo + ' ' + e.descricao + (e.zona ? ' · zona ' + e.zona : '')));
   if (o.operador) c.append(el('div', 'mute', 'Operador: ' + o.operador));
   if (o.adiadaAte) c.append(el('div', 'mute', 'Volta à fila às ' + hora(o.adiadaAte)));
