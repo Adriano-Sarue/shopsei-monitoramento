@@ -26,6 +26,9 @@ export interface QueueOptions {
   now?: () => Date;
   // Chamado a cada mudança de uma ocorrência (criar, atribuir, anotar, adiar, concluir).
   onChange?: (o: Ocorrencia) => void;
+  // Minutos que uma ocorrência nova espera em "pendente" antes de ir à fila (ex.: falha de energia,
+  // que costuma voltar sozinha). A restauração é anotada e o operador conclui do mesmo jeito.
+  esperaMin?: (e: AlarmEvent) => number;
 }
 
 // Eventos que exigem atendimento de um operador. Arme/desarme, teste e supervisão só
@@ -107,10 +110,18 @@ export class IncidentQueue {
 
     // Eventos repetidos da mesma conta entram na ocorrência aberta em vez de criar outra.
     const open = this.incidents.find((i) => i.conta === e.account && i.situacao !== 'encerrada');
+    const espera = this.opts.esperaMin?.(e) ?? 0;
     if (open) {
       this.anexar(open, e);
       open.prioridade = Math.min(open.prioridade, e.priority);
+      // Evento que não pode esperar traz de volta à fila uma ocorrência pendente (adiada ou em espera).
+      if (open.situacao === 'pendente' && espera <= 0) {
+        open.situacao = 'aguardando';
+        open.adiadaAte = undefined;
+        open.acoes.push({ em: this.now(), descricao: `Novo evento (${e.description}): voltou para a fila` });
+      }
       this.changed(open);
+      this.distribute();
       return open;
     }
     const incident: Ocorrencia = {
@@ -123,6 +134,11 @@ export class IncidentQueue {
       eventos: [e],
       acoes: [],
     };
+    if (espera > 0) {
+      incident.situacao = 'pendente';
+      incident.adiadaAte = new Date(this.now().getTime() + espera * 60_000);
+      incident.acoes.push({ em: this.now(), descricao: `Aguardando restauração por ${espera} min antes de ir para a fila` });
+    }
     this.incidents.push(incident);
     this.changed(incident);
     this.distribute();

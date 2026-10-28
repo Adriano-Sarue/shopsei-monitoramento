@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
+import { planoPara, PREFIXO_PASSO } from '../incidents/planos.js';
 import type { IncidentQueue, Ocorrencia } from '../incidents/queue.js';
 import { conferirSenha, hashSenha, SENHA_MINIMA } from '../auth/senha.js';
 import { Sessoes, type Sessao } from '../auth/sessoes.js';
@@ -23,7 +24,7 @@ export interface ApiOptions {
 function clienteResumo(c: Cliente | undefined, completo: boolean) {
   if (!c) return null;
   return {
-    id: c.id, nome: c.nome, endereco: c.endereco ?? null, tipo: c.tipo ?? null, contatos: c.contatos,
+    id: c.id, nome: c.nome, endereco: c.endereco ?? null, tipo: c.tipo ?? null, contatos: c.contatos, instrucoes: c.instrucoes ?? null,
     // Palavra-chave e contra-senha só vão para quem está atendendo a ocorrência.
     palavraChave: completo ? (c.palavraChave ?? null) : null,
     contraSenha: completo ? (c.contraSenha ?? null) : null,
@@ -34,11 +35,13 @@ function clienteResumo(c: Cliente | undefined, completo: boolean) {
 
 function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false) {
   const ultimo = o.eventos[o.eventos.length - 1]!;
+  const cadastrada = comCadastro ? cliente !== undefined : o.contaCadastrada;
+  const feitos = new Set(o.acoes.filter((a) => a.descricao.startsWith(PREFIXO_PASSO)).map((a) => a.descricao.slice(PREFIXO_PASSO.length)));
   return {
     id: o.id,
     conta: o.conta,
     // Com o cadastro ligado vale o estado atual: o cliente pode ser cadastrado durante o atendimento.
-    contaCadastrada: comCadastro ? cliente !== undefined : o.contaCadastrada,
+    contaCadastrada: cadastrada,
     cliente: clienteResumo(cliente, o.situacao === 'em_atendimento'),
     prioridade: o.prioridade,
     situacao: o.situacao,
@@ -50,6 +53,7 @@ function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false) {
       em: e.receivedAt, codigo: e.code, descricao: e.description, zona: e.zoneOrUser ?? null, protocolo: e.protocol,
     })),
     resumo: ultimo.description,
+    plano: planoPara(o, cadastrada).map((passo) => ({ passo, feito: feitos.has(passo) })),
     acoes: o.acoes.map((a) => ({ em: a.em.toISOString(), operador: a.operador ?? null, descricao: a.descricao })),
   };
 }
@@ -280,6 +284,18 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
         queue.setOperator(q.nome ?? text(body.nome, 'nome'), body.disponivel === true);
         return send(res, 200, { ok: true });
       }
+      const anota = /^\/api\/ocorrencias\/(\d+)\/acoes$/.exec(url.pathname);
+      if (req.method === 'POST' && anota) {
+        // Anotação do operador: passo do plano feito, ligação feita ou texto livre.
+        const body = await readJson(req);
+        const operador = q.nome ?? text(body.operador, 'operador');
+        const descricao = text(body.descricao, 'descricao');
+        if (descricao.length > 500) throw new Error('Anotação longa demais (máximo 500 caracteres)');
+        const o = queue.get(Number(anota[1]));
+        if (o.situacao !== 'em_atendimento' || o.operador !== operador) throw new Error('Ocorrência está com outro operador');
+        queue.registrarAcao(o.id, operador, descricao);
+        return send(res, 200, resumo(o, opts.clientes?.porConta(o.conta), opts.clientes !== undefined));
+      }
       const m = /^\/api\/ocorrencias\/(\d+)\/(concluir|adiar)$/.exec(url.pathname);
       if (req.method === 'POST' && m) {
         const id = Number(m[1]);
@@ -304,6 +320,8 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
           endereco: typeof b.endereco === 'string' ? b.endereco : undefined,
           tipo: typeof b.tipo === 'string' ? b.tipo : undefined,
           observacoes: typeof b.observacoes === 'string' ? b.observacoes : undefined,
+          instrucoes: typeof b.instrucoes === 'string' ? b.instrucoes : undefined,
+          intervaloTesteHoras: b.intervaloTesteHoras === undefined || b.intervaloTesteHoras === null || b.intervaloTesteHoras === '' ? undefined : Number(b.intervaloTesteHoras),
           palavraChave: typeof b.palavraChave === 'string' ? b.palavraChave : undefined,
           contraSenha: typeof b.contraSenha === 'string' ? b.contraSenha : undefined,
           contas: Array.isArray(b.contas) ? b.contas.map(String) : [],

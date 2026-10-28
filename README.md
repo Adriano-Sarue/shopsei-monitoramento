@@ -57,6 +57,10 @@ da Shop Sei ficam em `public/app.css` (variáveis no topo). **Ponha atrás de HT
 - **Operador que sumiu:** se o navegador do operador fica 90 s sem consultar (fechou, caiu a internet), ele sai da escala e as ocorrências dele voltam para a fila. O mesmo vale no Sair.
 - **Câmeras:** cada cliente pode ter até 3 links de câmera (visualizador web ou nuvem da marca); aparecem como botões só para quem está atendendo.
 - **Histórico:** ocorrências encerradas com filtro por conta e data, e exportação CSV (abre no Excel).
+- **Plano de ação:** cada ocorrência mostra os passos do tipo de evento (disparo, pânico, coação, incêndio, falha de energia, comunicação) para o operador marcar, mais as instruções próprias do cliente, que valem mais que o padrão.
+- **Registro de ligações e anotações:** botões Atendeu / Não atendeu / Recado em cada providência e campo livre; tudo fica no histórico da ocorrência com hora e operador.
+- **Falta de teste periódico:** no cadastro do cliente, escolha o prazo máximo sem sinal das centrais (1 a 48 h); passou, abre ocorrência.
+- **Falha de energia espera:** falha AC fica `FALHA_ENERGIA_ESPERA_MIN` minutos (padrão 30, 0 desliga) em pendente antes de ir à fila; um disparo na mesma conta traz a ocorrência de volta na hora. Quem conclui é sempre o operador.
 - **Trocar senha:** cada usuário troca a própria em *Senha*.
 
 ## Feed Sur-Gard (Active Net 3)

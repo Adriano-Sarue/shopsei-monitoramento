@@ -25,6 +25,16 @@ export class MemoryRepo implements Repositorio {
     return [...this.ocorrencias.values()].filter((o) => o.situacao !== 'encerrada').map((o) => structuredClone(o));
   }
 
+  async ultimosEventos(): Promise<Map<string, Date>> {
+    const m = new Map<string, Date>();
+    for (const e of this.eventos) {
+      if (e.protocol === 'INTERNO') continue;
+      const d = new Date(e.receivedAt);
+      if (d > (m.get(e.account) ?? new Date(0))) m.set(e.account, d);
+    }
+    return m;
+  }
+
   async listarEncerradas(f: FiltroHistorico): Promise<Ocorrencia[]> {
     return [...this.ocorrencias.values()]
       .filter((o) => o.situacao === 'encerrada' && (!f.conta || o.conta === f.conta) && (!f.de || o.encerradaEm! >= f.de) && (!f.ate || o.encerradaEm! <= f.ate))

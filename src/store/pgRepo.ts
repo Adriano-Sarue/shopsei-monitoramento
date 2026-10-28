@@ -81,6 +81,11 @@ export class PgRepo implements Repositorio {
     return rows.map((r) => this.ocorrencia(r));
   }
 
+  async ultimosEventos(): Promise<Map<string, Date>> {
+    const { rows } = await this.pool.query<{ conta: string; ultimo: Date }>("SELECT conta, max(recebido_em) AS ultimo FROM eventos WHERE protocolo <> 'INTERNO' GROUP BY conta");
+    return new Map(rows.map((r) => [r.conta, r.ultimo]));
+  }
+
   async listarEncerradas(f: FiltroHistorico): Promise<Ocorrencia[]> {
     const { rows } = await this.pool.query<OcorrenciaRow>(
       `SELECT * FROM ocorrencias WHERE situacao = 'encerrada'
@@ -106,6 +111,8 @@ export class PgRepo implements Repositorio {
       endereco: r.endereco ?? undefined,
       tipo: r.tipo ?? undefined,
       observacoes: r.observacoes ?? undefined,
+      instrucoes: r.instrucoes ?? undefined,
+      intervaloTesteHoras: r.intervalo_teste_horas ?? undefined,
       palavraChave: r.palavra_chave ?? undefined,
       contraSenha: r.contra_senha ?? undefined,
       ativo: r.ativo,
@@ -157,8 +164,9 @@ export class PgRepo implements Repositorio {
     const c = validarCliente(entrada);
     const id = await this.transacao(async (db) => {
       const { rows } = await db.query(
-        'INSERT INTO clientes (nome, endereco, tipo, observacoes, palavra_chave, contra_senha) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-        [c.nome, c.endereco ?? null, c.tipo ?? null, c.observacoes ?? null, c.palavraChave ?? null, c.contraSenha ?? null],
+        `INSERT INTO clientes (nome, endereco, tipo, observacoes, palavra_chave, contra_senha, instrucoes, intervalo_teste_horas)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [c.nome, c.endereco ?? null, c.tipo ?? null, c.observacoes ?? null, c.palavraChave ?? null, c.contraSenha ?? null, c.instrucoes ?? null, c.intervaloTesteHoras ?? null],
       );
       const novo = Number(rows[0].id);
       await this.gravarContasEContatos(db, novo, c);
@@ -171,8 +179,9 @@ export class PgRepo implements Repositorio {
     const c = validarCliente(entrada);
     await this.transacao(async (db) => {
       const r = await db.query(
-        'UPDATE clientes SET nome=$2, endereco=$3, tipo=$4, observacoes=$5, palavra_chave=$6, contra_senha=$7 WHERE id=$1',
-        [id, c.nome, c.endereco ?? null, c.tipo ?? null, c.observacoes ?? null, c.palavraChave ?? null, c.contraSenha ?? null],
+        `UPDATE clientes SET nome=$2, endereco=$3, tipo=$4, observacoes=$5, palavra_chave=$6, contra_senha=$7, instrucoes=$8,
+           intervalo_teste_horas=$9 WHERE id=$1`,
+        [id, c.nome, c.endereco ?? null, c.tipo ?? null, c.observacoes ?? null, c.palavraChave ?? null, c.contraSenha ?? null, c.instrucoes ?? null, c.intervaloTesteHoras ?? null],
       );
       if (r.rowCount === 0) throw new Error(`Cliente ${id} não existe`);
       await db.query('DELETE FROM contas WHERE cliente_id = $1', [id]);

@@ -19,7 +19,7 @@
 <div id="erro" class="msg erro" style="padding:6px 20px 0"></div>
 <main class="colunas">
   <section class="coluna"><h2>Aguardando atendimento</h2><div id="aguardando"></div></section>
-  <section class="coluna"><h2>Pendente (adiado)</h2><div id="pendente"></div></section>
+  <section class="coluna"><h2>Pendente (adiado ou em espera)</h2><div id="pendente"></div></section>
   <section class="coluna"><h2>Em atendimento</h2><div id="em_atendimento"></div></section>
 </main>
 
@@ -53,6 +53,11 @@ function bip() {
 }
 
 function aviso(texto) { $('erro').textContent = texto; }
+const rascunhos = {};
+
+async function anotar(o, descricao) {
+  try { await api('/api/ocorrencias/' + o.id + '/acoes', { method: 'POST', body: JSON.stringify({ descricao }) }); await load(); return true; } catch (e) { aviso(e.message); return false; }
+}
 
 function card(o, nova) {
   const p = Math.min(o.prioridade, 4);
@@ -70,15 +75,51 @@ function card(o, nova) {
       for (const cam of o.cliente.cameras) { const a = el('a', '', '📹 ' + cam.nome + (cam.marca ? ' · ' + cam.marca : '')); a.href = cam.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; cams.append(a); }
       c.append(cams);
     }
+    if (o.cliente.instrucoes) { const ins = el('div', 'instrucoes'); ins.append(el('strong', '', 'Instruções do cliente: '), document.createTextNode(o.cliente.instrucoes)); c.append(ins); }
     if (o.cliente.contatos.length) {
       const d = el('div', 'providencias');
       for (const ct of o.cliente.contatos) {
-        const linha = el('div', '', ct.ordem + '. ' + ct.nome + (ct.telefone ? ' · ' : ''));
-        if (ct.telefone) { const a = el('a', '', ct.telefone); a.href = 'tel:' + ct.telefone.replace(/[^\d+]/g, ''); linha.append(a); }
+        const linha = el('div', 'contato');
+        const nome = el('span', '', ct.ordem + '. ' + ct.nome + (ct.telefone ? ' · ' : ''));
+        if (ct.telefone) { const a = el('a', '', ct.telefone); a.href = 'tel:' + ct.telefone.replace(/[^\d+]/g, ''); nome.append(a); }
+        linha.append(nome);
+        if (o.operador === eu.nome) {
+          const bs = el('span', 'ligacao');
+          for (const [rotulo, texto] of [['Atendeu', 'atendeu'], ['Não atendeu', 'não atendeu'], ['Recado', 'deixei recado']]) {
+            const b = el('button', 'mini', rotulo);
+            b.onclick = () => anotar(o, 'Ligação para ' + ct.nome + (ct.telefone ? ' · ' + ct.telefone : '') + ': ' + texto);
+            bs.append(b);
+          }
+          linha.append(bs);
+        }
         d.append(linha);
       }
       c.append(d);
     }
+  }
+  if (o.situacao === 'em_atendimento' && o.operador === eu.nome) {
+    const pl = el('div', 'plano');
+    pl.append(el('div', 'rotulo', 'Plano de ação'));
+    for (const item of o.plano) {
+      const l = el('label', 'passo' + (item.feito ? ' feito' : ''));
+      const cb = el('input'); cb.type = 'checkbox'; cb.checked = item.feito; cb.disabled = item.feito;
+      cb.onchange = () => anotar(o, 'Passo concluído: ' + item.passo);
+      l.append(cb, document.createTextNode(' ' + item.passo));
+      pl.append(l);
+    }
+    c.append(pl);
+    const nota = el('form', 'nota');
+    const campo = el('input'); campo.placeholder = 'Anotar (ex.: polícia acionada, viatura 12)'; campo.maxLength = 500;
+    campo.value = rascunhos[o.id] || ''; campo.dataset.ocorrencia = o.id;
+    campo.oninput = () => { rascunhos[o.id] = campo.value; };
+    const ok = el('button', '', 'Anotar'); ok.type = 'submit';
+    nota.onsubmit = (ev) => { ev.preventDefault(); if (campo.value.trim()) anotar(o, campo.value.trim()).then((feito) => { if (feito) delete rascunhos[o.id]; }); };
+    nota.append(campo, ok); c.append(nota);
+  }
+  if (o.acoes.length) {
+    const h = el('ul', 'historico-acoes');
+    for (const a of o.acoes.slice(-5)) h.append(el('li', '', hora(a.em) + ' · ' + (a.operador ? a.operador + ': ' : '') + a.descricao));
+    c.append(h);
   }
   const ev = el('ul', 'eventos');
   for (const e of o.eventos.slice(-4)) ev.append(el('li', '', hora(e.em) + ' · ' + e.codigo + ' ' + e.descricao + (e.zona ? ' · zona ' + e.zona : '')));
@@ -122,11 +163,13 @@ async function load() {
     const novas = conhecidas ? lista.filter((o) => !conhecidas.has(o.id)) : [];
     conhecidas = ids;
     if (novas.some((o) => o.prioridade <= 2) || (novas.length && disponivel && novas.some((o) => o.operador === eu.nome))) bip();
+    const foco = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.ocorrencia : undefined;
     for (const id of ['aguardando', 'pendente', 'em_atendimento']) {
       const col = lista.filter((o) => o.situacao === id).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));
       $('n-' + id).textContent = col.length;
       $(id).replaceChildren(...(col.length ? col.map((o) => card(o, novas.includes(o))) : [el('div', 'vazio', 'Nada por aqui')]));
     }
+    if (foco) { const campo = document.querySelector('input[data-ocorrencia="' + foco + '"]'); if (campo) { campo.focus(); campo.setSelectionRange(campo.value.length, campo.value.length); } }
   } catch (e) { aviso(e.message); }
 }
 
