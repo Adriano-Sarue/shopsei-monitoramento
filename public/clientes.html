@@ -15,7 +15,9 @@
   <form id="form" class="cartao painel">
     <h2 id="titulo">Novo cliente</h2>
     <label>Nome <input id="nome" required></label>
-    <label>Contas (números que a central envia, separados por vírgula) <input id="contas" required placeholder="0013, 0014"></label>
+    <label>Código da conta <input id="contas" required placeholder="0013">
+      <span class="mute">É o número que a central de alarme do cliente envia em cada evento (o mesmo cadastrado na central e no Moni). É por ele que o sistema descobre de qual cliente é o alarme. Se o cliente tem mais de uma central, separe os códigos por vírgula (0013, 0014).</span>
+    </label>
     <label>Endereço <input id="endereco"></label>
     <div class="grade">
       <label>Tipo <input id="tipo" placeholder="RESIDENCIAL"></label>
