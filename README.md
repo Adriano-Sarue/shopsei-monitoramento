@@ -51,6 +51,14 @@ distribui as ocorrências (mais urgente primeiro). Ele conclui (motivo e texto) 
 da Shop Sei ficam em `public/app.css` (variáveis no topo). **Ponha atrás de HTTPS** antes de expor na internet
 (com HTTPS o cookie sai como `Secure` quando o proxy envia `X-Forwarded-Proto: https`, ou defina `COOKIE_SEGURO=1`).
 
+## O que mais o console faz
+
+- **Feed parado:** o selo "Último evento" fica vermelho se nenhuma central mandar nada (nem teste/keep alive) por 10 minutos.
+- **Operador que sumiu:** se o navegador do operador fica 90 s sem consultar (fechou, caiu a internet), ele sai da escala e as ocorrências dele voltam para a fila. O mesmo vale no Sair.
+- **Câmeras:** cada cliente pode ter até 3 links de câmera (visualizador web ou nuvem da marca); aparecem como botões só para quem está atendendo.
+- **Histórico:** ocorrências encerradas com filtro por conta e data, e exportação CSV (abre no Excel).
+- **Trocar senha:** cada usuário troca a própria em *Senha*.
+
 ## Feed Sur-Gard (Active Net 3)
 
 Na Shop Sei os eventos chegam ao Moni pelo Active Net 3, que os repassa por porta

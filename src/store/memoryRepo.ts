@@ -1,6 +1,6 @@
 import type { Ocorrencia } from '../incidents/queue.js';
 import type { AlarmEvent } from '../protocols/types.js';
-import { ContaDuplicadaError, LoginDuplicadoError, validarCliente, validarUsuario, type Cliente, type NovoCliente, type NovoUsuario, type Repositorio, type Usuario } from './repositorio.js';
+import { ContaDuplicadaError, LoginDuplicadoError, validarCliente, validarUsuario, type Cliente, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Usuario } from './repositorio.js';
 
 // Implementação em memória: usada nos testes e para rodar sem banco (nada sobrevive ao reinício).
 export class MemoryRepo implements Repositorio {
@@ -23,6 +23,14 @@ export class MemoryRepo implements Repositorio {
 
   async carregarOcorrenciasAbertas(): Promise<Ocorrencia[]> {
     return [...this.ocorrencias.values()].filter((o) => o.situacao !== 'encerrada').map((o) => structuredClone(o));
+  }
+
+  async listarEncerradas(f: FiltroHistorico): Promise<Ocorrencia[]> {
+    return [...this.ocorrencias.values()]
+      .filter((o) => o.situacao === 'encerrada' && (!f.conta || o.conta === f.conta) && (!f.de || o.encerradaEm! >= f.de) && (!f.ate || o.encerradaEm! <= f.ate))
+      .sort((a, b) => b.encerradaEm!.getTime() - a.encerradaEm!.getTime())
+      .slice(0, f.limite)
+      .map((o) => structuredClone(o));
   }
 
   async listarClientes(): Promise<Cliente[]> {

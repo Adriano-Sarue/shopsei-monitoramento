@@ -30,6 +30,17 @@
       <label><input id="c2n" placeholder="Nome 2"></label><label><input id="c2t" placeholder="Telefone 2"></label>
       <label><input id="c3n" placeholder="Nome 3"></label><label><input id="c3t" placeholder="Telefone 3"></label></div>
     </fieldset>
+    <fieldset><legend>Câmeras (abrem para o operador no disparo)</legend>
+      <div class="grade">
+        <label><input id="k1n" placeholder="Nome 1 (ex.: Entrada)"></label><label><input id="k1m" placeholder="Marca (Intelbras, Hikvision…)"></label>
+        <label style="grid-column:1/-1"><input id="k1u" placeholder="Link 1 (https://…)"></label>
+        <label><input id="k2n" placeholder="Nome 2"></label><label><input id="k2m" placeholder="Marca"></label>
+        <label style="grid-column:1/-1"><input id="k2u" placeholder="Link 2 (https://…)"></label>
+        <label><input id="k3n" placeholder="Nome 3"></label><label><input id="k3m" placeholder="Marca"></label>
+        <label style="grid-column:1/-1"><input id="k3u" placeholder="Link 3 (https://…)"></label>
+      </div>
+      <p class="mute" style="margin:0 0 10px">Use o link do visualizador web ou da nuvem da marca. Evite colocar a senha da câmera no link.</p>
+    </fieldset>
     <div id="msg" class="msg" role="status"></div>
     <div style="display:flex;gap:8px"><button class="marca-btn" type="submit">Salvar</button><button type="button" id="limpar">Novo</button></div>
   </form>
@@ -37,7 +48,7 @@
 <script src="/app.js"></script>
 <script>
 let editando = null, clientes = [];
-const CAMPOS = ['nome', 'contas', 'endereco', 'tipo', 'observacoes', 'palavraChave', 'contraSenha', 'c1n', 'c1t', 'c2n', 'c2t', 'c3n', 'c3t'];
+const CAMPOS = ['nome', 'contas', 'endereco', 'tipo', 'observacoes', 'palavraChave', 'contraSenha', 'c1n', 'c1t', 'c2n', 'c2t', 'c3n', 'c3t', 'k1n', 'k1m', 'k1u', 'k2n', 'k2m', 'k2u', 'k3n', 'k3m', 'k3u'];
 
 function limpar() { editando = null; $('titulo').textContent = 'Novo cliente'; for (const id of CAMPOS) $(id).value = ''; }
 function editar(c) {
@@ -45,6 +56,7 @@ function editar(c) {
   $('nome').value = c.nome; $('contas').value = c.contas.join(', '); $('endereco').value = c.endereco || ''; $('tipo').value = c.tipo || '';
   $('observacoes').value = c.observacoes || ''; $('palavraChave').value = c.palavraChave || ''; $('contraSenha').value = c.contraSenha || '';
   [1, 2, 3].forEach((n) => { const ct = c.contatos[n - 1]; $('c' + n + 'n').value = ct ? ct.nome : ''; $('c' + n + 't').value = ct ? ct.telefone || '' : ''; });
+  [1, 2, 3].forEach((n) => { const k = (c.cameras || [])[n - 1]; $('k' + n + 'n').value = k ? k.nome : ''; $('k' + n + 'm').value = k ? k.marca || '' : ''; $('k' + n + 'u').value = k ? k.url : ''; });
   window.scrollTo({ top: 0, behavior: 'smooth' }); $('nome').focus();
 }
 function desenhar() {
@@ -64,7 +76,8 @@ async function carregar() { try { clientes = await api('/api/clientes'); desenha
 $('form').onsubmit = async (ev) => {
   ev.preventDefault();
   const contatos = [1, 2, 3].map((n) => ({ nome: $('c' + n + 'n').value, telefone: $('c' + n + 't').value, ordem: n })).filter((c) => c.nome.trim());
-  const body = { nome: $('nome').value, contas: $('contas').value.split(',').map((s) => s.trim()).filter(Boolean), endereco: $('endereco').value, tipo: $('tipo').value, observacoes: $('observacoes').value, palavraChave: $('palavraChave').value, contraSenha: $('contraSenha').value, contatos };
+  const cameras = [1, 2, 3].map((n) => ({ nome: $('k' + n + 'n').value, marca: $('k' + n + 'm').value, url: $('k' + n + 'u').value, ordem: n })).filter((k) => k.nome.trim() || k.url.trim());
+  const body = { nome: $('nome').value, contas: $('contas').value.split(',').map((s) => s.trim()).filter(Boolean), endereco: $('endereco').value, tipo: $('tipo').value, observacoes: $('observacoes').value, palavraChave: $('palavraChave').value, contraSenha: $('contraSenha').value, contatos, cameras };
   try {
     await api(editando ? '/api/clientes/' + editando : '/api/clientes', { method: editando ? 'PUT' : 'POST', body: JSON.stringify(body) });
     toast('Cliente salvo'); mensagem('msg', ''); limpar(); carregar();

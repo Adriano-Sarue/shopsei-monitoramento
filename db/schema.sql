@@ -71,3 +71,14 @@ CREATE TABLE IF NOT EXISTS usuarios (
   ativo       BOOLEAN NOT NULL DEFAULT TRUE,
   criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Câmeras do cliente (links que o operador abre ao atender um disparo).
+CREATE TABLE IF NOT EXISTS cameras (
+  id          BIGSERIAL PRIMARY KEY,
+  cliente_id  BIGINT NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  nome        TEXT NOT NULL,
+  marca       TEXT,
+  url         TEXT NOT NULL,
+  ordem       INT NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS cameras_cliente_idx ON cameras (cliente_id, ordem);

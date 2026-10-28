@@ -12,6 +12,7 @@
   <div class="cartao numero"><b id="n-pendente">0</b><span class="mute">Pendentes</span></div>
   <div class="cartao numero"><b id="n-em_atendimento">0</b><span class="mute">Em atendimento</span></div>
   <div class="espaco"></div>
+  <span id="feed" class="feed" title="Quando chegou o último evento de qualquer central. Se ficar vermelho, o feed pode ter parado.">Aguardando eventos…</span>
   <label class="mute" style="margin:0;display:flex;gap:6px;align-items:center"><input id="som" type="checkbox" style="width:auto"> Som de aviso</label>
   <div class="disp"><span class="bolinha" id="bolinha"></span><span id="estado" class="mute">Indisponível</span><button id="disp" class="principal">Ficar disponível</button></div>
 </div>
@@ -64,6 +65,11 @@ function card(o, nova) {
   if (o.cliente && o.cliente.endereco) c.append(el('div', 'mute', o.cliente.endereco));
   if (o.cliente && o.situacao === 'em_atendimento') {
     if (o.cliente.palavraChave || o.cliente.contraSenha) c.append(el('div', 'chaves', 'Palavra-chave: ' + (o.cliente.palavraChave || '-') + '  ·  Contra-senha: ' + (o.cliente.contraSenha || '-')));
+    if (o.cliente.cameras && o.cliente.cameras.length) {
+      const cams = el('div', 'cameras');
+      for (const cam of o.cliente.cameras) { const a = el('a', '', '📹 ' + cam.nome + (cam.marca ? ' · ' + cam.marca : '')); a.href = cam.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; cams.append(a); }
+      c.append(cams);
+    }
     if (o.cliente.contatos.length) {
       const d = el('div', 'providencias');
       for (const ct of o.cliente.contatos) {
@@ -94,9 +100,23 @@ function card(o, nova) {
   return c;
 }
 
+const LIMITE_SILENCIO_MIN = 10;
+function mostrarFeed(st) {
+  const f = $('feed');
+  const base = new Date(st.ultimoEventoEm || st.iniciadoEm).getTime();
+  const min = Math.floor((new Date(st.agora).getTime() - base) / 60000);
+  const ruim = min >= LIMITE_SILENCIO_MIN;
+  f.className = 'feed' + (ruim ? ' ruim' : '');
+  f.textContent = st.ultimoEventoEm
+    ? (ruim ? '⚠ Sem eventos há ' + min + ' min. Confira o Active Net' : 'Último evento ' + haQuanto(st.ultimoEventoEm))
+    : (ruim ? '⚠ Nenhum evento desde que o sistema iniciou (' + min + ' min)' : 'Aguardando eventos…');
+}
+
 async function load() {
   try {
-    const lista = await api('/api/ocorrencias');
+    const [lista, st, voce] = await Promise.all([api('/api/ocorrencias'), api('/api/estado'), api('/api/eu')]);
+    mostrarFeed(st);
+    if (eu.nome && voce.disponivel !== disponivel) { disponivel = voce.disponivel; mostrarEstado(); }
     ultimaLista = lista; aviso('');
     const ids = new Set(lista.map((o) => o.id));
     const novas = conhecidas ? lista.filter((o) => !conhecidas.has(o.id)) : [];

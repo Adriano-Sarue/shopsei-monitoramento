@@ -41,6 +41,11 @@ async function contrato(repo: Repositorio): Promise<void> {
   await assert.rejects(repo.criarCliente({ nome: 'X', contas: [], contatos: [] }), /conta/);
   await assert.rejects(repo.criarCliente({ nome: 'X', contas: ['zz!'], contatos: [] }), /inválida/);
 
+  await assert.rejects(repo.criarCliente({ nome: 'Cam', contas: ['0020'], contatos: [], cameras: [{ nome: 'A', url: 'rtsp://x', ordem: 1 }] }), /http/);
+  const cam = await repo.criarCliente({ nome: 'Cam', contas: ['0020'], contatos: [], cameras: [{ nome: 'Entrada', marca: 'Hikvision', url: 'https://c.exemplo/1', ordem: 1 }] });
+  assert.deepEqual(cam.cameras, [{ nome: 'Entrada', marca: 'Hikvision', url: 'https://c.exemplo/1', ordem: 1 }]);
+  assert.deepEqual((await repo.atualizarCliente(cam.id, { nome: 'Cam', contas: ['0020'], contatos: [] })).cameras, []);
+
   const atual = await repo.atualizarCliente(criado.id, { nome: 'Farmaformula Centro', contas: ['0016'], contatos: [{ nome: 'João', telefone: '1488888', ordem: 1 }] });
   assert.equal(atual.nome, 'Farmaformula Centro');
   assert.deepEqual(atual.contas, ['0016']);
@@ -88,7 +93,7 @@ test('repositório PostgreSQL cumpre o contrato', { skip: !process.env.PG_TEST_U
   await repo.init();
   // Limpa as tabelas para o teste ser repetível.
   const pool = (repo as unknown as { pool: { query: (q: string) => Promise<unknown> } }).pool;
-  await pool.query('TRUNCATE ocorrencias, eventos, contatos, contas, clientes, usuarios RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE ocorrencias, eventos, contatos, cameras, contas, clientes, usuarios RESTART IDENTITY CASCADE');
   try {
     await contrato(repo);
   } finally {

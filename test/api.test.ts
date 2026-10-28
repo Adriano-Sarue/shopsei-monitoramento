@@ -153,3 +153,61 @@ test('login por usuário: sessão, perfis, bloqueio e revogação', async () => 
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+test('câmeras só aparecem a quem atende; estado do feed, histórico, CSV e troca de senha', async () => {
+  const repo = new MemoryRepo();
+  await repo.criarUsuario({ login: 'ana', nome: 'Ana', papel: 'operador', senhaHash: await hashSenha('senha-ana-1') });
+  const clientes = new ClienteIndex(repo);
+  const queue = new IncidentQueue({ contaCadastrada: (c) => clientes.porConta(c) !== undefined });
+  let ultimo: Date | undefined;
+  const server = createApi(queue, { token: 'segredo', publicDir: 'public', port: 0, repo, clientes, ultimoEvento: () => ultimo });
+  const port = await listen(server, 0, '127.0.0.1');
+  const base = `http://127.0.0.1:${port}`;
+  const h = { authorization: 'Bearer segredo', 'content-type': 'application/json' };
+  try {
+    const r = await fetch(`${base}/api/clientes`, { method: 'POST', headers: h, body: JSON.stringify({
+      nome: 'Loja', contas: ['0013'], cameras: [{ nome: 'Entrada', marca: 'Intelbras', url: 'https://cam.exemplo/1' }],
+    }) });
+    assert.equal(r.status, 201);
+    const ruim = await fetch(`${base}/api/clientes`, { method: 'POST', headers: h, body: JSON.stringify({ nome: 'X', contas: ['1'], cameras: [{ nome: 'C', url: 'rtsp://x' }] }) });
+    assert.equal(ruim.status, 400);
+
+    queue.handleEvent(ev('0013', '1130 01 003'));
+    const antes = (await (await fetch(`${base}/api/ocorrencias`, { headers: h })).json()) as { cliente: { cameras: unknown[] } }[];
+    assert.deepEqual(antes[0]!.cliente.cameras, []);
+    queue.setOperator('Ana', true);
+    const depois = (await (await fetch(`${base}/api/ocorrencias`, { headers: h })).json()) as { id: number; cliente: { cameras: { nome: string; url: string }[] } }[];
+    assert.equal(depois[0]!.cliente.cameras[0]!.url, 'https://cam.exemplo/1');
+
+    assert.equal(((await (await fetch(`${base}/api/estado`, { headers: h })).json()) as { ultimoEventoEm: string | null }).ultimoEventoEm, null);
+    ultimo = new Date('2026-10-28T12:00:00Z');
+    assert.equal(((await (await fetch(`${base}/api/estado`, { headers: h })).json()) as { ultimoEventoEm: string }).ultimoEventoEm, '2026-10-28T12:00:00.000Z');
+
+    // Histórico e CSV (a ocorrência precisa estar gravada como encerrada).
+    const o = queue.encerrar(depois[0]!.id, 'Ana', 'Alarme falso; teste', 'ok "aspas"');
+    await repo.salvarOcorrencia(o);
+    const hist = (await (await fetch(`${base}/api/historico?conta=0013&de=2020-01-01`, { headers: h })).json()) as { cliente: string }[];
+    assert.equal(hist.length, 1);
+    assert.equal(hist[0]!.cliente, 'Loja');
+    assert.equal(((await (await fetch(`${base}/api/historico?conta=9999`, { headers: h })).json()) as unknown[]).length, 0);
+    const csv = await fetch(`${base}/api/historico.csv`, { headers: h });
+    assert.match(csv.headers.get('content-disposition') ?? '', /historico\.csv/);
+    const texto = await csv.text();
+    assert.ok(texto.includes('"Alarme falso; teste"'));
+    assert.ok(texto.includes('"ok ""aspas"""'));
+
+    // Troca de senha: pede a atual, exige 8 caracteres e vale no próximo login.
+    const json = { 'content-type': 'application/json' };
+    const entrar = (senha: string) => fetch(`${base}/api/login`, { method: 'POST', headers: json, body: JSON.stringify({ login: 'ana', senha }) });
+    const login = await entrar('senha-ana-1');
+    const c = { ...json, cookie: (login.headers.get('set-cookie') ?? '').split(';')[0]! };
+    const troca = (atual: string, nova: string) => fetch(`${base}/api/senha`, { method: 'POST', headers: c, body: JSON.stringify({ atual, nova }) });
+    assert.equal((await troca('errada', 'nova-senha-1')).status, 400);
+    assert.equal((await troca('senha-ana-1', 'curta')).status, 400);
+    assert.equal((await troca('senha-ana-1', 'nova-senha-1')).status, 200);
+    assert.equal((await entrar('senha-ana-1')).status, 401);
+    assert.equal((await entrar('nova-senha-1')).status, 200);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});

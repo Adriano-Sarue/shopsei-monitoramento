@@ -93,3 +93,13 @@ dialog h3 { margin-bottom: 4px; } dialog .botoes { display: flex; justify-conten
 .grade { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
 fieldset { border: 1px solid var(--line); border-radius: 10px; margin: 0 0 12px; padding: 10px 12px 2px; } legend { font-size: 12px; color: var(--mute); padding: 0 4px; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--marca-escura); color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 14px; z-index: 20; box-shadow: 0 8px 24px rgba(0, 0, 0, .3); }
+
+.feed { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 6px 12px; border-radius: 99px; background: var(--card); border: 1px solid var(--line); }
+.feed.ruim { background: var(--erro); border-color: var(--erro); color: #fff; font-weight: 600; }
+.cameras { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cameras a { text-decoration: none; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); font-size: 13px; font-weight: 600; }
+.cameras a:hover { border-color: var(--destaque); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; } th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--mute); }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tabela { overflow-x: auto; padding: 4px 8px; }
+.filtros { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 14px; } .filtros label { margin: 0; } .filtros input { width: auto; }

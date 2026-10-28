@@ -16,6 +16,8 @@ export interface ApiOptions {
   port: number;
   repo?: Repositorio;
   clientes?: ClienteIndex;
+  // Quando chegou o último evento de qualquer central (inclusive teste e supervisão): mostra no console se o feed calou.
+  ultimoEvento?: () => Date | undefined;
 }
 
 function clienteResumo(c: Cliente | undefined, completo: boolean) {
@@ -25,15 +27,18 @@ function clienteResumo(c: Cliente | undefined, completo: boolean) {
     // Palavra-chave e contra-senha só vão para quem está atendendo a ocorrência.
     palavraChave: completo ? (c.palavraChave ?? null) : null,
     contraSenha: completo ? (c.contraSenha ?? null) : null,
+    // Os links das câmeras podem trazer credenciais: também só para quem atende.
+    cameras: completo ? (c.cameras ?? []) : [],
   };
 }
 
-function resumo(o: Ocorrencia, cliente?: Cliente) {
+function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false) {
   const ultimo = o.eventos[o.eventos.length - 1]!;
   return {
     id: o.id,
     conta: o.conta,
-    contaCadastrada: o.contaCadastrada,
+    // Com o cadastro ligado vale o estado atual: o cliente pode ser cadastrado durante o atendimento.
+    contaCadastrada: comCadastro ? cliente !== undefined : o.contaCadastrada,
     cliente: clienteResumo(cliente, o.situacao === 'em_atendimento'),
     prioridade: o.prioridade,
     situacao: o.situacao,
@@ -59,6 +64,7 @@ function tokenOk(req: IncomingMessage, token: string | undefined): boolean {
 }
 
 const COOKIE = 'shopsei_sessao';
+const INICIO = new Date();
 
 function cookieDe(req: IncomingMessage): string | undefined {
   for (const parte of (req.headers.cookie ?? '').split(';')) {
@@ -85,6 +91,7 @@ const PAGINAS: Record<string, { arquivo: string; tipo: string; publica?: boolean
   '/': { arquivo: 'index.html', tipo: 'text/html' },
   '/index.html': { arquivo: 'index.html', tipo: 'text/html' },
   '/clientes.html': { arquivo: 'clientes.html', tipo: 'text/html', admin: true },
+  '/historico.html': { arquivo: 'historico.html', tipo: 'text/html' },
   '/usuarios.html': { arquivo: 'usuarios.html', tipo: 'text/html', admin: true },
   '/login.html': { arquivo: 'login.html', tipo: 'text/html', publica: true },
   '/app.css': { arquivo: 'app.css', tipo: 'text/css', publica: true },
@@ -151,12 +158,14 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
         if (!opts.repo) return send(res, 501, { erro: 'Login não está ligado' });
         const body = await readJson(req);
         const login = String(body.login ?? '').trim().toLowerCase();
-        const chave = `${login}|${req.socket.remoteAddress}`;
-        if (sessoes.bloqueado(chave)) return send(res, 429, { erro: 'Muitas tentativas. Aguarde alguns minutos.' });
+        const ip = `ip|${req.headers['x-forwarded-for'] ?? req.socket.remoteAddress}`;
+        const chave = `${login}|${ip}`;
+        if (sessoes.bloqueado(chave) || sessoes.bloqueado(ip, 25)) return send(res, 429, { erro: 'Muitas tentativas. Aguarde alguns minutos.' });
         const u = await opts.repo.buscarUsuario(login);
         const certo = await conferirSenha(String(body.senha ?? ''), u?.senhaHash);
         if (!u || !u.ativo || !certo) {
           sessoes.registrarFalha(chave);
+          sessoes.registrarFalha(ip);
           return send(res, 401, { erro: 'Usuário ou senha incorretos' });
         }
         sessoes.limparFalhas(chave);
@@ -166,12 +175,52 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
       if (!q) return send(res, 401, { erro: 'Faça login' });
 
       if (req.method === 'POST' && url.pathname === '/api/logout') {
-        if (q.nome) queue.setOperator(q.nome, false);
         sessoes.encerrar(q.token);
+        if (q.nome && !sessoes.temSessao(q.nome)) queue.desconectar(q.nome);
         return send(res, 200, { ok: true }, 'application/json', { 'set-cookie': cookieSessao(req, '', 0) });
       }
       if (req.method === 'GET' && url.pathname === '/api/eu') {
         return send(res, 200, { login: q.sessao?.login ?? null, nome: q.nome ?? null, papel: q.papel, disponivel: q.nome ? queue.estaDisponivel(q.nome) : false });
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/estado') {
+        const ultimo = opts.ultimoEvento?.();
+        return send(res, 200, { agora: new Date().toISOString(), iniciadoEm: INICIO.toISOString(), ultimoEventoEm: ultimo?.toISOString() ?? null });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/senha') {
+        if (!q.sessao || !opts.repo) return send(res, 400, { erro: 'Disponível só para quem entrou com usuário' });
+        const body = await readJson(req);
+        const u = await opts.repo.buscarUsuario(q.sessao.login);
+        if (!u || !(await conferirSenha(String(body.atual ?? ''), u.senhaHash))) return send(res, 400, { erro: 'A senha atual não confere' });
+        if (typeof body.nova !== 'string' || body.nova.length < SENHA_MINIMA) return send(res, 400, { erro: `A nova senha precisa ter ao menos ${SENHA_MINIMA} caracteres` });
+        await opts.repo.atualizarUsuario(u.id, { senhaHash: await hashSenha(body.nova) });
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'GET' && (url.pathname === '/api/historico' || url.pathname === '/api/historico.csv')) {
+        if (!opts.repo) return send(res, 501, { erro: 'Histórico não está ligado' });
+        const data = (v: string | null, fim: boolean): Date | undefined => {
+          if (!v) return undefined;
+          const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T${fim ? '23:59:59.999' : '00:00:00'}` : v);
+          if (Number.isNaN(d.getTime())) throw new Error('Data inválida');
+          return d;
+        };
+        const csv = url.pathname.endsWith('.csv');
+        const lista = await opts.repo.listarEncerradas({
+          conta: url.searchParams.get('conta')?.trim().toUpperCase() || undefined,
+          de: data(url.searchParams.get('de'), false),
+          ate: data(url.searchParams.get('ate'), true),
+          limite: Math.min(Math.max(Number(url.searchParams.get('limite')) || 200, 1), csv ? 5000 : 500),
+        });
+        const linhas = lista.map((o) => ({
+          id: o.id, conta: o.conta, cliente: opts.clientes?.porConta(o.conta)?.nome ?? null, prioridade: o.prioridade,
+          abertaEm: o.abertaEm.toISOString(), encerradaEm: o.encerradaEm?.toISOString() ?? null, operador: o.operador ?? null,
+          motivo: o.motivo ?? null, conclusao: o.conclusao ?? null, resumo: o.eventos[0]?.description ?? '', eventos: o.eventos.length,
+        }));
+        if (!csv) return send(res, 200, linhas);
+        const cel = (v: unknown) => { const t = v === null || v === undefined ? '' : String(v); return /[",;\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+        const cab = ['id', 'conta', 'cliente', 'prioridade', 'abertaEm', 'encerradaEm', 'operador', 'motivo', 'conclusao', 'resumo', 'eventos'] as const;
+        const texto = '\ufeff' + [cab.join(';'), ...linhas.map((l) => cab.map((c) => cel(l[c])).join(';'))].join('\r\n') + '\r\n';
+        return send(res, 200, texto, 'text/csv', { 'content-disposition': 'attachment; filename="historico.csv"' });
       }
 
       // Administração de usuários.
@@ -204,7 +253,7 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
             const u = await opts.repo.atualizarUsuario(id, mudancas);
             if (!u.ativo || mudancas.senhaHash || mudancas.papel) {
               sessoes.revogarUsuario(id);
-              queue.setOperator(u.nome, false);
+              queue.desconectar(u.nome);
             }
             return send(res, 200, usuarioPublico(u));
           }
@@ -216,7 +265,7 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
       }
 
       if (req.method === 'GET' && url.pathname === '/api/ocorrencias') {
-        return send(res, 200, queue.list().filter((o) => o.situacao !== 'encerrada').map((o) => resumo(o, opts.clientes?.porConta(o.conta))));
+        return send(res, 200, queue.list().filter((o) => o.situacao !== 'encerrada').map((o) => resumo(o, opts.clientes?.porConta(o.conta), opts.clientes !== undefined)));
       }
       if (req.method === 'POST' && url.pathname === '/api/operadores') {
         const body = await readJson(req);
@@ -231,12 +280,12 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
         if (m[2] === 'concluir') {
           const conclusao = typeof body.conclusao === 'string' ? body.conclusao : undefined;
           const o = queue.encerrar(id, operador, text(body.motivo, 'motivo'), conclusao);
-          return send(res, 200, resumo(o, opts.clientes?.porConta(o.conta)));
+          return send(res, 200, resumo(o, opts.clientes?.porConta(o.conta), opts.clientes !== undefined));
         }
         const ate = new Date(text(body.ate, 'ate'));
         if (Number.isNaN(ate.getTime())) throw new Error('Data inválida');
         const o = queue.adiar(id, operador, ate);
-        return send(res, 200, resumo(o, opts.clientes?.porConta(o.conta)));
+        return send(res, 200, resumo(o, opts.clientes?.porConta(o.conta), opts.clientes !== undefined));
       }
       if (url.pathname === '/api/clientes' || /^\/api\/clientes\/\d+$/.test(url.pathname)) {
         if (q.papel !== 'admin') return send(res, 403, { erro: 'Só administradores' });
@@ -250,6 +299,9 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
           palavraChave: typeof b.palavraChave === 'string' ? b.palavraChave : undefined,
           contraSenha: typeof b.contraSenha === 'string' ? b.contraSenha : undefined,
           contas: Array.isArray(b.contas) ? b.contas.map(String) : [],
+          cameras: Array.isArray(b.cameras) ? (b.cameras as Record<string, unknown>[]).map((x, i) => ({
+            nome: String(x.nome ?? ''), marca: typeof x.marca === 'string' ? x.marca : undefined, url: String(x.url ?? ''), ordem: Number(x.ordem) || i + 1,
+          })) : [],
           contatos: Array.isArray(b.contatos) ? (b.contatos as Record<string, unknown>[]).map((x, i) => ({
             nome: String(x.nome ?? ''), telefone: typeof x.telefone === 'string' ? x.telefone : undefined, ordem: Number(x.ordem) || i + 1,
           })) : [],
