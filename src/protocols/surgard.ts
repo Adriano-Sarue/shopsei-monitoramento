@@ -1,11 +1,12 @@
 import { parseContactId } from './contactId.js';
 import type { AlarmEvent } from './types.js';
 
-// Decodificador PROVISÓRIO do feed serial no estilo Sur-Gard (MLR2/System I-II) que o
-// Active Net 3 envia ao Moni. O layout abaixo é o público e comum:
-//   "5 R LLL 18 AAAA QEEE GG ZZZ S" terminado em 0x14 (DC4), onde 18 = Contact ID,
-//   R = receptora, LLL = linha/grupo, AAAA = conta, S = dígito de verificação.
-// Deve ser confirmado e ajustado com uma captura real do feed (ver README).
+// Decodificador do feed serial no estilo Sur-Gard que o Active Net 3 envia ao Moni.
+// Formato observado no Monitor.Txt da Shop Sei (mensagem sem espaços internos):
+//   "5011 180043E13001003" = cabeçalho "5RLL", espaço, "18" (Contact ID), conta (4),
+//   E (evento novo) ou R (restauração), código (3), partição (2) e zona/usuário (3).
+// Também aceita o layout público com espaços ("5 1 011 18 1234 1130 01 003 8").
+// Ainda falta validar com tráfego recente (o Monitor.Txt vai só até 03/12/2024).
 export const SURGARD_ACK = Buffer.from([0x06]);
 export const SURGARD_NAK = Buffer.from([0x15]);
 const TERMINATOR = 0x14;
@@ -18,8 +19,16 @@ export interface SurgardMessage {
   raw: string;
 }
 
+const COMPACT = /^5(\d)(\d{2,3})\s+18([0-9A-F]{4})([ER])(\d{3})(\d{2})([0-9A-F]{3})/i;
+
 export function parseSurgardLine(text: string): SurgardMessage {
   const raw = text.replace(/[\x00-\x08\x0a-\x1f]/g, '').trim();
+  const compact = COMPACT.exec(raw);
+  if (compact) {
+    const [, receiver, line, account, flag, code, partition, zone] = compact as unknown as string[];
+    const qualifier = flag!.toUpperCase() === 'R' ? '3' : '1';
+    return { receiver: receiver!, line: line!, account: account!, event: `${qualifier}${code} ${partition} ${zone}`, raw };
+  }
   const tokens = raw.split(/\s+/);
   // tokens: ["5", R, LLL, "18", AAAA, QEEE, GG, ZZZ, S?]
   const fmt = tokens.indexOf('18');
