@@ -13,6 +13,7 @@ export interface Ocorrencia {
   atendidaEm?: Date;
   encerradaEm?: Date;
   motivo?: string;
+  conclusao?: string;
   // Preenchido quando o operador adia: volta a "aguardando" a partir desse horário.
   adiadaAte?: Date;
   eventos: AlarmEvent[];
@@ -145,6 +146,48 @@ export class IncidentQueue {
     }
     this.distribute();
     return vencidas;
+  }
+
+  // Ações em lote (tela "Ações para eventos selecionados"): concluir ou agendar várias
+  // ocorrências de uma vez, inclusive as que ainda não estão com ninguém. As que estão
+  // com outro operador são ignoradas e devolvidas em "ignoradas".
+  concluirEmLote(ids: number[], operador: string, motivo: string, conclusao?: string): { concluidas: Ocorrencia[]; ignoradas: number[] } {
+    const concluidas: Ocorrencia[] = [];
+    const ignoradas: number[] = [];
+    for (const id of ids) {
+      const incident = this.get(id);
+      if (incident.situacao === 'encerrada' || (incident.operador && incident.operador !== operador)) {
+        ignoradas.push(id);
+        continue;
+      }
+      incident.situacao = 'encerrada';
+      incident.operador = operador;
+      incident.encerradaEm = this.now();
+      incident.motivo = motivo;
+      incident.conclusao = conclusao;
+      concluidas.push(incident);
+    }
+    this.distribute();
+    return { concluidas, ignoradas };
+  }
+
+  agendarEmLote(ids: number[], operador: string, ate: Date): { agendadas: Ocorrencia[]; ignoradas: number[] } {
+    const agendadas: Ocorrencia[] = [];
+    const ignoradas: number[] = [];
+    for (const id of ids) {
+      const incident = this.get(id);
+      if (incident.situacao === 'encerrada' || (incident.operador && incident.operador !== operador)) {
+        ignoradas.push(id);
+        continue;
+      }
+      incident.situacao = 'pendente';
+      incident.adiadaAte = ate;
+      incident.operador = undefined;
+      incident.acoes.push({ em: this.now(), operador, descricao: `Agendada para ${ate.toISOString()}` });
+      agendadas.push(incident);
+    }
+    this.distribute();
+    return { agendadas, ignoradas };
   }
 
   encerrar(id: number, operador: string, motivo: string): Ocorrencia {

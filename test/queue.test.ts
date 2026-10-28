@@ -81,3 +81,27 @@ test('adiar tira do operador e reativarVencidas devolve à fila no prazo', () =>
   assert.equal(q.reativarVencidas().length, 1);
   assert.equal(q.get(id).situacao, 'em_atendimento');
 });
+
+test('lote: conclui várias ocorrências e ignora as que estão com outro operador', () => {
+  const q = new IncidentQueue();
+  q.setOperator('Beto', true);
+  const c = q.handleEvent(ev('5', '1130 01 003'))!.id; // fica com Beto
+  q.setOperator('Beto', false);
+  const a = q.handleEvent(ev('16', '1301 00 000'))!.id;
+  const b = q.handleEvent(ev('137', '1301 00 000'))!.id;
+  const r = q.concluirEmLote([a, b, c], 'Ana', 'Falha de energia do cliente', 'Restaurou sozinha');
+  assert.deepEqual(r.concluidas.map((i) => i.id).sort(), [a, b].sort());
+  assert.deepEqual(r.ignoradas, [c]);
+  assert.equal(q.get(a).conclusao, 'Restaurou sozinha');
+  assert.equal(q.get(a).situacao, 'encerrada');
+});
+
+test('lote: agendar várias ocorrências de uma vez', () => {
+  const agora = new Date('2026-10-28T11:00:00Z');
+  const q = new IncidentQueue({ now: () => agora });
+  const a = q.handleEvent(ev('16', '1301 00 000'))!.id;
+  const b = q.handleEvent(ev('137', '1250 00 000'))!.id;
+  const r = q.agendarEmLote([a, b], 'Ana', new Date('2026-10-28T12:00:00Z'));
+  assert.equal(r.agendadas.length, 2);
+  assert.equal(q.get(a).situacao, 'pendente');
+});
