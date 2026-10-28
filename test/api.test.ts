@@ -223,3 +223,26 @@ test('câmeras só aparecem a quem atende; estado do feed, histórico, CSV e tro
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+test('disparo vem marcado como alarme; falha de energia não; logo e ícone são servidos', async () => {
+  const { queue, server, base } = await montar({ token: 'segredo' });
+  const h = { authorization: 'Bearer segredo' };
+  try {
+    queue.handleEvent(ev('0020', '1130 01 003'));
+    queue.handleEvent(ev('0021', '1301 00 000'));
+    queue.handleEvent(ev('0022', '1344 00 000'));
+    const lista = (await (await fetch(`${base}/api/ocorrencias`, { headers: h })).json()) as { conta: string; alarme: boolean }[];
+    assert.deepEqual(Object.fromEntries(lista.map((o) => [o.conta, o.alarme])), { '0020': true, '0021': false, '0022': true });
+
+    for (const [caminho, tipo] of [['/logo.jpg', 'image/jpeg'], ['/logo-icone.png', 'image/png'], ['/favicon.png', 'image/png']]) {
+      const r = await fetch(base + caminho);
+      assert.equal(r.status, 200, caminho);
+      assert.equal(r.headers.get('content-type'), tipo);
+      const bytes = Buffer.from(await r.arrayBuffer());
+      assert.ok(bytes.length > 1000, caminho);
+      assert.equal(bytes[0], tipo === 'image/png' ? 0x89 : 0xff, caminho);
+    }
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
