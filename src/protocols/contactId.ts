@@ -21,13 +21,16 @@ const CONTACT_ID_CODES: Record<string, CodeInfo> = {
   '134': { description: 'Disparo de entrada/saída', category: 'alarm', priority: 2 },
   '137': { description: 'Violação (tamper)', category: 'alarm', priority: 2 },
   '144': { description: 'Tamper de sensor', category: 'fault', priority: 3 },
-  '301': { description: 'Falta de energia AC', category: 'fault', priority: 3 },
+  '250': { description: 'Falha de keep alive', category: 'fault', priority: 3 },
+  '301': { description: 'Falha AC', category: 'fault', priority: 3 },
   '302': { description: 'Bateria baixa', category: 'fault', priority: 3 },
   '305': { description: 'Reinício da central', category: 'fault', priority: 4 },
+  '313': { description: 'Falha na restauração da bateria', category: 'fault', priority: 3 },
   '321': { description: 'Falha na sirene', category: 'fault', priority: 3 },
   '350': { description: 'Falha de comunicação', category: 'fault', priority: 3 },
   '351': { description: 'Falha na linha telefônica', category: 'fault', priority: 3 },
   '354': { description: 'Falha ao comunicar evento', category: 'fault', priority: 3 },
+  '360': { description: 'Restauração na supervisão da central', category: 'supervision', priority: 5 },
   '380': { description: 'Falha de sensor', category: 'fault', priority: 3 },
   '384': { description: 'Bateria baixa em sensor sem fio', category: 'fault', priority: 4 },
   '400': { description: 'Abertura/fechamento', category: 'openclose', priority: 5 },
@@ -39,7 +42,7 @@ const CONTACT_ID_CODES: Record<string, CodeInfo> = {
   '456': { description: 'Arme parcial', category: 'openclose', priority: 5 },
   '570': { description: 'Zona anulada (bypass)', category: 'other', priority: 4 },
   '601': { description: 'Teste manual', category: 'test', priority: 6 },
-  '602': { description: 'Teste periódico', category: 'test', priority: 6 },
+  '602': { description: 'Auto teste', category: 'test', priority: 6 },
 };
 
 function fallbackByRange(code: string): CodeInfo {

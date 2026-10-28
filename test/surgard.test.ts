@@ -13,7 +13,7 @@ test('Sur-Gard: lê receptora, linha, conta e evento Contact ID', () => {
 
 test('Sur-Gard: falta de AC e restauração', () => {
   const ac = surgardToAlarmEvent(parseSurgardLine('5 1 011 18 0042 1301 00 000 5'), 'COM2');
-  assert.match(ac.description, /energia AC/);
+  assert.match(ac.description, /Falha AC/);
   const back = surgardToAlarmEvent(parseSurgardLine('5 1 011 18 0042 3301 00 000 5'), 'COM2');
   assert.equal(back.qualifier, 'restore');
 });
@@ -39,7 +39,7 @@ test('Sur-Gard: formato real do Monitor.Txt (compacto, E/R)', () => {
   assert.equal(ev.qualifier, 'new');
   const rest = surgardToAlarmEvent(parseSurgardLine('5011 180043R13001003'), 'COM2');
   assert.equal(rest.qualifier, 'restore');
-  const desconhecido = surgardToAlarmEvent(parseSurgardLine('5011 180052E36001000'), 'COM2');
-  assert.equal(desconhecido.code, '360');
-  assert.equal(desconhecido.category, 'fault');
+  const restSup = surgardToAlarmEvent(parseSurgardLine('5011 180052E36001000'), 'COM2');
+  assert.equal(restSup.code, '360');
+  assert.equal(restSup.category, 'supervision');
 });
