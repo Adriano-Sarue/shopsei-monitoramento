@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type { IncidentQueue, Ocorrencia } from '../incidents/queue.js';
+import { ContaDuplicadaError, type Cliente, type ClienteIndex, type NovoCliente, type Repositorio } from '../store/repositorio.js';
 
 export interface ApiOptions {
   // Token compartilhado exigido em todas as chamadas /api (cabeçalho Authorization: Bearer).
@@ -10,14 +11,27 @@ export interface ApiOptions {
   publicDir: string;
   host?: string;
   port: number;
+  repo?: Repositorio;
+  clientes?: ClienteIndex;
 }
 
-function resumo(o: Ocorrencia) {
+function clienteResumo(c: Cliente | undefined, completo: boolean) {
+  if (!c) return null;
+  return {
+    id: c.id, nome: c.nome, endereco: c.endereco ?? null, tipo: c.tipo ?? null, contatos: c.contatos,
+    // Palavra-chave e contra-senha só vão para quem está atendendo a ocorrência.
+    palavraChave: completo ? (c.palavraChave ?? null) : null,
+    contraSenha: completo ? (c.contraSenha ?? null) : null,
+  };
+}
+
+function resumo(o: Ocorrencia, cliente?: Cliente) {
   const ultimo = o.eventos[o.eventos.length - 1]!;
   return {
     id: o.id,
     conta: o.conta,
     contaCadastrada: o.contaCadastrada,
+    cliente: clienteResumo(cliente, o.situacao === 'em_atendimento'),
     prioridade: o.prioridade,
     situacao: o.situacao,
     operador: o.operador ?? null,
@@ -66,14 +80,15 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
-      if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-        return send(res, 200, await readFile(join(opts.publicDir, 'index.html'), 'utf8'), 'text/html');
+      const pagina = url.pathname === '/' ? 'index.html' : url.pathname === '/index.html' || url.pathname === '/clientes.html' ? url.pathname.slice(1) : undefined;
+      if (req.method === 'GET' && pagina) {
+        return send(res, 200, await readFile(join(opts.publicDir, pagina), 'utf8'), 'text/html');
       }
       if (!url.pathname.startsWith('/api/')) return send(res, 404, { erro: 'Não encontrado' });
       if (!tokenOk(req, opts.token)) return send(res, 401, { erro: 'Token inválido' });
 
       if (req.method === 'GET' && url.pathname === '/api/ocorrencias') {
-        return send(res, 200, queue.list().filter((o) => o.situacao !== 'encerrada').map(resumo));
+        return send(res, 200, queue.list().filter((o) => o.situacao !== 'encerrada').map((o) => resumo(o, opts.clientes?.porConta(o.conta))));
       }
       if (req.method === 'POST' && url.pathname === '/api/operadores') {
         const body = await readJson(req);
@@ -86,13 +101,45 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
         const body = await readJson(req);
         const operador = text(body.operador, 'operador');
         if (m[2] === 'concluir') {
-          const o = queue.encerrar(id, operador, text(body.motivo, 'motivo'));
-          if (typeof body.conclusao === 'string') o.conclusao = body.conclusao;
-          return send(res, 200, resumo(o));
+          const conclusao = typeof body.conclusao === 'string' ? body.conclusao : undefined;
+          const o = queue.encerrar(id, operador, text(body.motivo, 'motivo'), conclusao);
+          return send(res, 200, resumo(o, opts.clientes?.porConta(o.conta)));
         }
         const ate = new Date(text(body.ate, 'ate'));
         if (Number.isNaN(ate.getTime())) throw new Error('Data inválida');
-        return send(res, 200, resumo(queue.adiar(id, operador, ate)));
+        const o = queue.adiar(id, operador, ate);
+        return send(res, 200, resumo(o, opts.clientes?.porConta(o.conta)));
+      }
+      if (url.pathname === '/api/clientes' || /^\/api\/clientes\/\d+$/.test(url.pathname)) {
+        if (!opts.repo || !opts.clientes) return send(res, 501, { erro: 'Cadastro de clientes não está ligado' });
+        if (req.method === 'GET' && url.pathname === '/api/clientes') return send(res, 200, await opts.repo.listarClientes());
+        const entrada = (b: Record<string, unknown>): NovoCliente => ({
+          nome: String(b.nome ?? ''),
+          endereco: typeof b.endereco === 'string' ? b.endereco : undefined,
+          tipo: typeof b.tipo === 'string' ? b.tipo : undefined,
+          observacoes: typeof b.observacoes === 'string' ? b.observacoes : undefined,
+          palavraChave: typeof b.palavraChave === 'string' ? b.palavraChave : undefined,
+          contraSenha: typeof b.contraSenha === 'string' ? b.contraSenha : undefined,
+          contas: Array.isArray(b.contas) ? b.contas.map(String) : [],
+          contatos: Array.isArray(b.contatos) ? (b.contatos as Record<string, unknown>[]).map((x, i) => ({
+            nome: String(x.nome ?? ''), telefone: typeof x.telefone === 'string' ? x.telefone : undefined, ordem: Number(x.ordem) || i + 1,
+          })) : [],
+        });
+        try {
+          let cliente: Cliente;
+          if (req.method === 'POST' && url.pathname === '/api/clientes') {
+            cliente = await opts.repo.criarCliente(entrada(await readJson(req)));
+          } else if (req.method === 'PUT') {
+            cliente = await opts.repo.atualizarCliente(Number(url.pathname.split('/').pop()), entrada(await readJson(req)));
+          } else {
+            return send(res, 405, { erro: 'Método não permitido' });
+          }
+          await opts.clientes.refresh();
+          return send(res, req.method === 'POST' ? 201 : 200, cliente);
+        } catch (err) {
+          if (err instanceof ContaDuplicadaError) return send(res, 409, { erro: err.message });
+          throw err;
+        }
       }
       send(res, 404, { erro: 'Não encontrado' });
     } catch (err) {

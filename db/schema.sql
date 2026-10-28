@@ -1,11 +1,11 @@
--- Esquema inicial (PostgreSQL). Cadastros, eventos e fila de ocorrências.
+-- Esquema (PostgreSQL). Idempotente: pode ser aplicado a cada inicialização.
 
-CREATE TABLE clientes (
+CREATE TABLE IF NOT EXISTS clientes (
   id            BIGSERIAL PRIMARY KEY,
   nome          TEXT NOT NULL,
   endereco      TEXT,
-  observacoes   TEXT,
   tipo          TEXT,
+  observacoes   TEXT,
   -- Conferidas pelo operador ao atender (palavra-chave e contra-senha do cliente).
   palavra_chave TEXT,
   contra_senha  TEXT,
@@ -13,75 +13,50 @@ CREATE TABLE clientes (
   criado_em     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Uma conta é o número que a central envia nos eventos.
-CREATE TABLE contas (
-  id            BIGSERIAL PRIMARY KEY,
-  cliente_id    BIGINT NOT NULL REFERENCES clientes(id),
-  numero        TEXT NOT NULL UNIQUE,
-  chave_aes     TEXT,
-  ativa         BOOLEAN NOT NULL DEFAULT TRUE
+-- Uma conta é o número que a central envia nos eventos (ex.: 0013).
+CREATE TABLE IF NOT EXISTS contas (
+  numero        TEXT PRIMARY KEY,
+  cliente_id    BIGINT NOT NULL REFERENCES clientes(id) ON DELETE CASCADE
 );
+CREATE INDEX IF NOT EXISTS contas_cliente_idx ON contas (cliente_id);
 
-CREATE TABLE contatos (
+-- Pessoas a acionar, em ordem (providências).
+CREATE TABLE IF NOT EXISTS contatos (
   id            BIGSERIAL PRIMARY KEY,
-  cliente_id    BIGINT NOT NULL REFERENCES clientes(id),
+  cliente_id    BIGINT NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
   nome          TEXT NOT NULL,
   telefone      TEXT,
-  ordem         INT NOT NULL DEFAULT 1,
-  senha         TEXT,
-  contrassenha  TEXT
+  ordem         INT NOT NULL DEFAULT 1
 );
+CREATE INDEX IF NOT EXISTS contatos_cliente_idx ON contatos (cliente_id, ordem);
 
-CREATE TABLE operadores (
-  id            BIGSERIAL PRIMARY KEY,
-  nome          TEXT NOT NULL,
-  disponivel    BOOLEAN NOT NULL DEFAULT FALSE
-);
-
-CREATE TABLE eventos (
+-- Histórico de tudo que chegou, já decodificado.
+CREATE TABLE IF NOT EXISTS eventos (
   id            BIGSERIAL PRIMARY KEY,
   recebido_em   TIMESTAMPTZ NOT NULL,
-  protocolo     TEXT NOT NULL,
   conta         TEXT NOT NULL,
   codigo        TEXT NOT NULL,
-  qualificador  TEXT,
-  particao      TEXT,
-  zona_usuario  TEXT,
-  descricao     TEXT NOT NULL,
-  categoria     TEXT NOT NULL,
-  prioridade    INT NOT NULL,
-  bruto         TEXT NOT NULL
+  protocolo     TEXT NOT NULL,
+  payload       JSONB NOT NULL
 );
-CREATE INDEX eventos_conta_idx ON eventos (conta, recebido_em DESC);
+CREATE INDEX IF NOT EXISTS eventos_conta_idx ON eventos (conta, recebido_em DESC);
 
-CREATE TYPE situacao_ocorrencia AS ENUM ('aguardando', 'pendente', 'em_atendimento', 'encerrada');
-
-CREATE TABLE ocorrencias (
-  id            BIGSERIAL PRIMARY KEY,
-  conta         TEXT NOT NULL,
+-- Ocorrências: o estado vivo da fila. Eventos e ações ficam em JSONB junto da ocorrência.
+CREATE TABLE IF NOT EXISTS ocorrencias (
+  id               BIGINT PRIMARY KEY,
+  conta            TEXT NOT NULL,
   conta_cadastrada BOOLEAN NOT NULL,
-  prioridade    INT NOT NULL,
-  situacao      situacao_ocorrencia NOT NULL DEFAULT 'aguardando',
-  operador_id   BIGINT REFERENCES operadores(id),
-  aberta_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  atendida_em   TIMESTAMPTZ,
-  encerrada_em  TIMESTAMPTZ,
-  motivo_encerramento TEXT,
-  conclusao     TEXT,
-  adiada_ate    TIMESTAMPTZ
+  prioridade       INT NOT NULL,
+  situacao         TEXT NOT NULL CHECK (situacao IN ('aguardando', 'pendente', 'em_atendimento', 'encerrada')),
+  operador         TEXT,
+  aberta_em        TIMESTAMPTZ NOT NULL,
+  atendida_em      TIMESTAMPTZ,
+  encerrada_em     TIMESTAMPTZ,
+  adiada_ate       TIMESTAMPTZ,
+  motivo           TEXT,
+  conclusao        TEXT,
+  eventos          JSONB NOT NULL DEFAULT '[]',
+  acoes            JSONB NOT NULL DEFAULT '[]'
 );
-CREATE INDEX ocorrencias_fila_idx ON ocorrencias (situacao, prioridade, aberta_em);
-
-CREATE TABLE ocorrencia_eventos (
-  ocorrencia_id BIGINT NOT NULL REFERENCES ocorrencias(id),
-  evento_id     BIGINT NOT NULL REFERENCES eventos(id),
-  PRIMARY KEY (ocorrencia_id, evento_id)
-);
-
-CREATE TABLE ocorrencia_acoes (
-  id            BIGSERIAL PRIMARY KEY,
-  ocorrencia_id BIGINT NOT NULL REFERENCES ocorrencias(id),
-  operador_id   BIGINT REFERENCES operadores(id),
-  em            TIMESTAMPTZ NOT NULL DEFAULT now(),
-  descricao     TEXT NOT NULL
-);
+CREATE INDEX IF NOT EXISTS ocorrencias_situacao_idx ON ocorrencias (situacao, prioridade, aberta_em);
+CREATE INDEX IF NOT EXISTS ocorrencias_conta_idx ON ocorrencias (conta, aberta_em DESC);

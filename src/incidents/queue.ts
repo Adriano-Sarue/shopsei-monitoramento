@@ -24,6 +24,8 @@ export interface QueueOptions {
   // Quais contas existem no cadastro. Eventos de outras contas viram ocorrência marcada.
   contaCadastrada?: (conta: string) => boolean;
   now?: () => Date;
+  // Chamado a cada mudança de uma ocorrência (criar, atribuir, anotar, adiar, concluir).
+  onChange?: (o: Ocorrencia) => void;
 }
 
 // Eventos que exigem atendimento de um operador. Arme/desarme, teste e supervisão só
@@ -44,6 +46,23 @@ export class IncidentQueue {
     this.now = opts.now ?? (() => new Date());
   }
 
+  private changed(o: Ocorrencia): void {
+    this.opts.onChange?.(o);
+  }
+
+  // Recarrega ocorrências abertas gravadas (na inicialização). Não distribui nada.
+  restore(lista: Ocorrencia[]): void {
+    for (const o of lista) {
+      if (o.situacao === 'em_atendimento') {
+        // Sem operador logado após o reinício: volta para a fila.
+        o.situacao = 'aguardando';
+        o.operador = undefined;
+      }
+      this.incidents.push(o);
+      this.nextId = Math.max(this.nextId, o.id + 1);
+    }
+  }
+
   setOperator(nome: string, disponivel: boolean): Ocorrencia[] {
     this.operators.set(nome, { disponivel });
     return disponivel ? this.distribute() : [];
@@ -59,6 +78,7 @@ export class IncidentQueue {
     if (open) {
       open.eventos.push(e);
       open.prioridade = Math.min(open.prioridade, e.priority);
+      this.changed(open);
       return open;
     }
     const incident: Ocorrencia = {
@@ -72,6 +92,7 @@ export class IncidentQueue {
       acoes: [],
     };
     this.incidents.push(incident);
+    this.changed(incident);
     this.distribute();
     return incident;
   }
@@ -81,6 +102,7 @@ export class IncidentQueue {
     if (!open) return undefined;
     open.eventos.push(e);
     open.acoes.push({ em: this.now(), descricao: `Restauração recebida: ${e.description}` });
+    this.changed(open);
     return open;
   }
 
@@ -95,6 +117,7 @@ export class IncidentQueue {
       waiting.situacao = 'em_atendimento';
       waiting.operador = operator;
       waiting.atendidaEm = this.now();
+      this.changed(waiting);
       assigned.push(waiting);
     }
   }
@@ -121,7 +144,9 @@ export class IncidentQueue {
   }
 
   registrarAcao(id: number, operador: string, descricao: string): void {
-    this.get(id).acoes.push({ em: this.now(), operador, descricao });
+    const incident = this.get(id);
+    incident.acoes.push({ em: this.now(), operador, descricao });
+    this.changed(incident);
   }
 
   // Adia a ocorrência: sai do operador e fica "pendente" até o horário informado.
@@ -132,6 +157,7 @@ export class IncidentQueue {
     incident.adiadaAte = ate;
     incident.operador = undefined;
     incident.acoes.push({ em: this.now(), operador, descricao: `Adiada até ${ate.toISOString()}` });
+    this.changed(incident);
     this.distribute();
     return incident;
   }
@@ -143,6 +169,7 @@ export class IncidentQueue {
     for (const i of vencidas) {
       i.situacao = 'aguardando';
       i.adiadaAte = undefined;
+      this.changed(i);
     }
     this.distribute();
     return vencidas;
@@ -165,6 +192,7 @@ export class IncidentQueue {
       incident.encerradaEm = this.now();
       incident.motivo = motivo;
       incident.conclusao = conclusao;
+      this.changed(incident);
       concluidas.push(incident);
     }
     this.distribute();
@@ -184,18 +212,21 @@ export class IncidentQueue {
       incident.adiadaAte = ate;
       incident.operador = undefined;
       incident.acoes.push({ em: this.now(), operador, descricao: `Agendada para ${ate.toISOString()}` });
+      this.changed(incident);
       agendadas.push(incident);
     }
     this.distribute();
     return { agendadas, ignoradas };
   }
 
-  encerrar(id: number, operador: string, motivo: string): Ocorrencia {
+  encerrar(id: number, operador: string, motivo: string, conclusao?: string): Ocorrencia {
     const incident = this.get(id);
     if (incident.operador !== operador) throw new Error('Ocorrência está com outro operador');
     incident.situacao = 'encerrada';
     incident.encerradaEm = this.now();
     incident.motivo = motivo;
+    incident.conclusao = conclusao;
+    this.changed(incident);
     this.distribute();
     return incident;
   }

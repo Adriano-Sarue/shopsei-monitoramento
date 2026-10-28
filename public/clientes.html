@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clientes · Shop Sei Monitoramento</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#1c2430; --mute:#6b7685; --line:#d9dde3; --err:#c0392b; --ok:#1e8449; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14181d; --card:#1e242b; --ink:#e8ecf1; --mute:#9aa5b1; --line:#323a44; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); }
+  header h1 { font-size:17px; margin:0 auto 0 0; }
+  a { color:inherit; }
+  main { display:grid; grid-template-columns:minmax(0,380px) minmax(0,1fr); gap:16px; padding:16px; }
+  @media (max-width:800px) { main { grid-template-columns:1fr; } }
+  input, button, textarea { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); width:100%; }
+  button { cursor:pointer; width:auto; } button.main { background:var(--ok); color:#fff; border-color:var(--ok); }
+  label { display:block; margin-bottom:8px; font-size:13px; color:var(--mute); }
+  fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 10px; padding:8px 10px; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:8px; }
+  .mute { color:var(--mute); font-size:13px; }
+  #msg { min-height:20px; } .err { color:var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Clientes</h1>
+  <a href="/">Voltar à fila</a>
+  <label style="margin:0">Token <input id="token" type="password" size="12" style="width:auto"></label>
+</header>
+<main>
+  <form id="form">
+    <h2 id="titulo" style="font-size:16px;margin:0 0 8px">Novo cliente</h2>
+    <label>Nome <input id="nome" required></label>
+    <label>Contas (números que a central envia, separados por vírgula) <input id="contas" required placeholder="0013, 0014"></label>
+    <label>Endereço <input id="endereco"></label>
+    <div class="row">
+      <label>Tipo <input id="tipo" placeholder="RESIDENCIAL"></label>
+      <label>Observações <input id="observacoes"></label>
+      <label>Palavra-chave <input id="palavraChave" autocomplete="off"></label>
+      <label>Contra-senha <input id="contraSenha" autocomplete="off"></label>
+    </div>
+    <fieldset><legend class="mute">Providências (ordem de ligação)</legend>
+      <div class="row"><input id="c1n" placeholder="Nome 1"><input id="c1t" placeholder="Telefone 1"></div><br>
+      <div class="row"><input id="c2n" placeholder="Nome 2"><input id="c2t" placeholder="Telefone 2"></div><br>
+      <div class="row"><input id="c3n" placeholder="Nome 3"><input id="c3t" placeholder="Telefone 3"></div>
+    </fieldset>
+    <button class="main" type="submit">Salvar</button>
+    <button type="button" id="limpar">Limpar</button>
+    <div id="msg"></div>
+  </form>
+  <section><div id="lista"></div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const store = { get: (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+$('token').value = store.get('token');
+let editando = null; let clientes = [];
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { authorization: 'Bearer ' + $('token').value, 'content-type': 'application/json' } });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.erro || r.statusText);
+  return data;
+}
+function el(tag, cls, txt) { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; }
+function msg(t, erro) { $('msg').textContent = t; $('msg').className = erro ? 'err' : ''; }
+
+function limpar() {
+  editando = null; $('titulo').textContent = 'Novo cliente';
+  for (const id of ['nome', 'contas', 'endereco', 'tipo', 'observacoes', 'palavraChave', 'contraSenha', 'c1n', 'c1t', 'c2n', 'c2t', 'c3n', 'c3t']) $(id).value = '';
+}
+function editar(c) {
+  editando = c.id; $('titulo').textContent = 'Editar cliente ' + c.id;
+  $('nome').value = c.nome; $('contas').value = c.contas.join(', '); $('endereco').value = c.endereco || ''; $('tipo').value = c.tipo || '';
+  $('observacoes').value = c.observacoes || ''; $('palavraChave').value = c.palavraChave || ''; $('contraSenha').value = c.contraSenha || '';
+  [1, 2, 3].forEach((n) => { const ct = c.contatos[n - 1]; $('c' + n + 'n').value = ct ? ct.nome : ''; $('c' + n + 't').value = ct ? ct.telefone || '' : ''; });
+  window.scrollTo(0, 0);
+}
+async function carregar() {
+  try {
+    clientes = await api('/api/clientes'); msg('');
+    $('lista').replaceChildren(...clientes.map((c) => {
+      const d = el('div', 'card');
+      d.append(el('strong', '', c.nome), el('div', 'mute', 'Contas: ' + c.contas.join(', ') + (c.tipo ? ' · ' + c.tipo : '')));
+      if (c.endereco) d.append(el('div', 'mute', c.endereco));
+      const b = el('button', '', 'Editar'); b.onclick = () => editar(c); d.append(b);
+      return d;
+    }));
+  } catch (e) { msg(e.message, true); }
+}
+$('form').onsubmit = async (ev) => {
+  ev.preventDefault(); store.set('token', $('token').value);
+  const contatos = [1, 2, 3].map((n) => ({ nome: $('c' + n + 'n').value, telefone: $('c' + n + 't').value, ordem: n })).filter((c) => c.nome.trim());
+  const body = { nome: $('nome').value, contas: $('contas').value.split(',').map((s) => s.trim()).filter(Boolean), endereco: $('endereco').value, tipo: $('tipo').value, observacoes: $('observacoes').value, palavraChave: $('palavraChave').value, contraSenha: $('contraSenha').value, contatos };
+  try {
+    await api(editando ? '/api/clientes/' + editando : '/api/clientes', { method: editando ? 'PUT' : 'POST', body: JSON.stringify(body) });
+    msg('Salvo.'); limpar(); carregar();
+  } catch (e) { msg(e.message, true); }
+};
+$('limpar').onclick = limpar;
+$('token').onchange = () => { store.set('token', $('token').value); carregar(); };
+carregar();
+</script>
+</body>
+</html>

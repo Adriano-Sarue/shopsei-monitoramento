@@ -18,6 +18,23 @@ Sistema próprio de monitoramento de alarmes da Shop Sei. Esta primeira parte é
   em `data/eventos-AAAA-MM-DD.jsonl`.
 - **Simulador de central** para testar sem mexer nos clientes reais.
 
+## Banco de dados e clientes
+
+Com `DATABASE_URL` (PostgreSQL 14+), o sistema cria as tabelas sozinho (`db/schema.sql`),
+guarda eventos, ocorrências e clientes, e **retoma a fila depois de um reinício**
+(ocorrências que estavam em atendimento voltam para "aguardando"). Sem `DATABASE_URL` ele
+roda em memória, só para desenvolvimento.
+
+Os clientes são cadastrados em `http://servidor:8090/clientes.html` (nome, contas, endereço,
+palavra-chave, contra-senha e até 3 providências). A palavra-chave e a contra-senha só
+aparecem para o operador que está atendendo a ocorrência. Uma conta só pode pertencer a um cliente.
+
+```bash
+DATABASE_URL=postgres://usuario:senha@localhost:5432/shopsei CONSOLE_TOKEN=segredo npm start
+```
+
+Testes com PostgreSQL: `PG_TEST_URL=postgres://... npm test` (sem a variável, esses testes são pulados).
+
 ## Console web do operador
 
 Definindo `CONSOLE_TOKEN` (e opcionalmente `CONSOLE_PORTA`, padrão 8090), sobe uma
@@ -25,8 +42,7 @@ página em `http://servidor:8090/` com as colunas Aguardando, Pendente e Em aten
 O operador informa o token e o nome, fica disponível, e a receptora distribui as
 ocorrências (mais urgente primeiro). Ele conclui (com motivo e texto) ou adia 30 minutos.
 O token é compartilhado e o console ainda não tem login por usuário: **ponha atrás de
-HTTPS/VPN antes de expor na internet**. A fila ainda é em memória (reiniciar zera a tela;
-os eventos continuam gravados em `data/`).
+HTTPS/VPN antes de expor na internet**. Eventos brutos continuam também em `data/`.
 
 ## Feed Sur-Gard (Active Net 3)
 
@@ -38,10 +54,10 @@ validarmos com uma captura real do feed.
 
 ## Pendente
 
-- Confirmar o formato que as centrais **JFL** usam ao reportar por IP. Se for
-  Contact ID/SIA dentro do DC-09, já funciona; se for um formato próprio da JFL,
-  entra como um novo decodificador em `src/protocols/`.
-- Banco PostgreSQL, fila de ocorrências, console do operador e relatórios (próximas etapas).
+- Validar o decodificador Sur-Gard com uma mensagem bruta atual (o `Monitor.Txt` do Moni
+  só vai até 12/2024) e a ponte que leva o feed serial do PC da empresa até o servidor.
+- Login por usuário e HTTPS (hoje há um token compartilhado).
+- Relatórios, envio de e-mail ao cliente e importação dos clientes existentes.
 
 ## Como rodar
 
@@ -63,7 +79,7 @@ npm run simular -- --conta 1234 --protocolo NULL                       # supervi
 ```
 
 Variáveis de ambiente: `RECEPTORA_TCP_PORTA`, `RECEPTORA_UDP_PORTA` (padrão 9000),
-`SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
+`DATABASE_URL`, `SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
 
 Com Docker:
 
