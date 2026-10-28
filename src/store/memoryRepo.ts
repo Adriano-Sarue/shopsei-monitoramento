@@ -1,13 +1,15 @@
 import type { Ocorrencia } from '../incidents/queue.js';
 import type { AlarmEvent } from '../protocols/types.js';
-import { ContaDuplicadaError, validarCliente, type Cliente, type NovoCliente, type Repositorio } from './repositorio.js';
+import { ContaDuplicadaError, LoginDuplicadoError, validarCliente, validarUsuario, type Cliente, type NovoCliente, type NovoUsuario, type Repositorio, type Usuario } from './repositorio.js';
 
 // Implementação em memória: usada nos testes e para rodar sem banco (nada sobrevive ao reinício).
 export class MemoryRepo implements Repositorio {
   readonly eventos: AlarmEvent[] = [];
   private readonly ocorrencias = new Map<number, Ocorrencia>();
   private readonly clientes: Cliente[] = [];
+  private readonly usuarios: Usuario[] = [];
   private nextId = 1;
+  private nextUsuario = 1;
 
   async init(): Promise<void> {}
 
@@ -50,6 +52,31 @@ export class MemoryRepo implements Repositorio {
     this.checarContas(c.contas, id);
     this.clientes[i] = { ...c, id, ativo: this.clientes[i]!.ativo };
     return structuredClone(this.clientes[i]!);
+  }
+
+  async listarUsuarios(): Promise<Usuario[]> {
+    return structuredClone(this.usuarios);
+  }
+
+  async buscarUsuario(login: string): Promise<Usuario | undefined> {
+    const u = this.usuarios.find((x) => x.login === login.trim().toLowerCase());
+    return u && structuredClone(u);
+  }
+
+  async criarUsuario(entrada: NovoUsuario): Promise<Usuario> {
+    const v = validarUsuario(entrada);
+    if (this.usuarios.some((x) => x.login === v.login)) throw new LoginDuplicadoError(`O login ${v.login} já existe`);
+    const u: Usuario = { ...v, id: this.nextUsuario++, ativo: true, senhaHash: entrada.senhaHash };
+    this.usuarios.push(u);
+    return structuredClone(u);
+  }
+
+  async atualizarUsuario(id: number, mudancas: Partial<Pick<Usuario, 'nome' | 'papel' | 'ativo' | 'senhaHash'>>): Promise<Usuario> {
+    const u = this.usuarios.find((x) => x.id === id);
+    if (!u) throw new Error(`Usuário ${id} não existe`);
+    const v = validarUsuario({ login: u.login, nome: mudancas.nome ?? u.nome, papel: mudancas.papel ?? u.papel });
+    Object.assign(u, v, { ativo: mudancas.ativo ?? u.ativo, senhaHash: mudancas.senhaHash ?? u.senhaHash });
+    return structuredClone(u);
   }
 
   async fechar(): Promise<void> {}

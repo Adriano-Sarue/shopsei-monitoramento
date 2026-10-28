@@ -5,7 +5,7 @@ import { parseContactId } from '../src/protocols/contactId.js';
 import type { AlarmEvent } from '../src/protocols/types.js';
 import { MemoryRepo } from '../src/store/memoryRepo.js';
 import { PgRepo } from '../src/store/pgRepo.js';
-import { ClienteIndex, ContaDuplicadaError, type Repositorio } from '../src/store/repositorio.js';
+import { ClienteIndex, ContaDuplicadaError, LoginDuplicadoError, type Repositorio } from '../src/store/repositorio.js';
 
 function ev(account: string, cid: string): AlarmEvent {
   return {
@@ -18,6 +18,15 @@ function ev(account: string, cid: string): AlarmEvent {
 async function contrato(repo: Repositorio): Promise<void> {
   await repo.init();
   await repo.init(); // idempotente
+
+  const u = await repo.criarUsuario({ login: ' Maria ', nome: 'Maria', papel: 'operador', senhaHash: 'h1' });
+  assert.equal(u.login, 'maria');
+  await assert.rejects(repo.criarUsuario({ login: 'maria', nome: 'Outra', papel: 'admin', senhaHash: 'h' }), LoginDuplicadoError);
+  await assert.rejects(repo.criarUsuario({ login: 'x', nome: 'X', papel: 'admin', senhaHash: 'h' }), /Login/);
+  assert.equal((await repo.buscarUsuario('MARIA'))?.senhaHash, 'h1');
+  const mud = await repo.atualizarUsuario(u.id, { papel: 'admin', ativo: false, senhaHash: 'h2' });
+  assert.deepEqual([mud.papel, mud.ativo, mud.senhaHash, mud.login], ['admin', false, 'h2', 'maria']);
+  assert.equal((await repo.listarUsuarios()).length, 1);
 
   const criado = await repo.criarCliente({
     nome: 'Farmaformula', endereco: 'Rua A, 10', tipo: 'COMERCIAL', palavraChave: 'abc', contraSenha: 'xyz',
@@ -79,7 +88,7 @@ test('repositório PostgreSQL cumpre o contrato', { skip: !process.env.PG_TEST_U
   await repo.init();
   // Limpa as tabelas para o teste ser repetível.
   const pool = (repo as unknown as { pool: { query: (q: string) => Promise<unknown> } }).pool;
-  await pool.query('TRUNCATE ocorrencias, eventos, contatos, contas, clientes RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE ocorrencias, eventos, contatos, contas, clientes, usuarios RESTART IDENTITY CASCADE');
   try {
     await contrato(repo);
   } finally {

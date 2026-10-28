@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import type { Ocorrencia, Situacao } from '../incidents/queue.js';
 import type { AlarmEvent } from '../protocols/types.js';
-import { ContaDuplicadaError, validarCliente, type Cliente, type NovoCliente, type Repositorio } from './repositorio.js';
+import { ContaDuplicadaError, LoginDuplicadoError, validarCliente, validarUsuario, type Cliente, type NovoCliente, type NovoUsuario, type Repositorio, type Usuario } from './repositorio.js';
 
 const SCHEMA = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'db', 'schema.sql');
 
@@ -158,6 +158,40 @@ export class PgRepo implements Repositorio {
       await this.gravarContasEContatos(db, id, c);
     });
     return (await this.listarClientes()).find((x) => x.id === id)!;
+  }
+
+  private usuario(r: Record<string, unknown>): Usuario {
+    return { id: Number(r.id), login: r.login as string, nome: r.nome as string, papel: r.papel as Usuario['papel'], ativo: r.ativo as boolean, senhaHash: r.senha_hash as string };
+  }
+
+  async listarUsuarios(): Promise<Usuario[]> {
+    const { rows } = await this.pool.query('SELECT * FROM usuarios ORDER BY nome');
+    return rows.map((r) => this.usuario(r));
+  }
+
+  async buscarUsuario(login: string): Promise<Usuario | undefined> {
+    const { rows } = await this.pool.query('SELECT * FROM usuarios WHERE login = $1', [login.trim().toLowerCase()]);
+    return rows[0] ? this.usuario(rows[0]) : undefined;
+  }
+
+  async criarUsuario(entrada: NovoUsuario): Promise<Usuario> {
+    const v = validarUsuario(entrada);
+    try {
+      const { rows } = await this.pool.query('INSERT INTO usuarios (login, nome, papel, senha_hash) VALUES ($1,$2,$3,$4) RETURNING *', [v.login, v.nome, v.papel, entrada.senhaHash]);
+      return this.usuario(rows[0]);
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') throw new LoginDuplicadoError(`O login ${v.login} já existe`);
+      throw err;
+    }
+  }
+
+  async atualizarUsuario(id: number, m: Partial<Pick<Usuario, 'nome' | 'papel' | 'ativo' | 'senhaHash'>>): Promise<Usuario> {
+    const { rows: atual } = await this.pool.query('SELECT * FROM usuarios WHERE id = $1', [id]);
+    if (!atual[0]) throw new Error(`Usuário ${id} não existe`);
+    const u = this.usuario(atual[0]);
+    const v = validarUsuario({ login: u.login, nome: m.nome ?? u.nome, papel: m.papel ?? u.papel });
+    const { rows } = await this.pool.query('UPDATE usuarios SET nome=$2, papel=$3, ativo=$4, senha_hash=$5 WHERE id=$1 RETURNING *', [id, v.nome, v.papel, m.ativo ?? u.ativo, m.senhaHash ?? u.senhaHash]);
+    return this.usuario(rows[0]);
   }
 
   async fechar(): Promise<void> {

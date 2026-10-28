@@ -1,4 +1,6 @@
 import { createApi, listen } from './api/server.js';
+import { randomBytes } from 'node:crypto';
+import { hashSenha } from './auth/senha.js';
 import { IncidentQueue } from './incidents/queue.js';
 import { AccountRegistry } from './receiver/accounts.js';
 import { Receiver, type RawFrame } from './receiver/server.js';
@@ -67,19 +69,20 @@ if (process.env.SURGARD_TCP_PORTA) {
   console.log(`Feed Sur-Gard ouvindo TCP ${await surgard.start()}`);
 }
 
-// Console web do operador. Desligado se CONSOLE_TOKEN não for definido.
-let api: ReturnType<typeof createApi> | undefined;
-if (process.env.CONSOLE_TOKEN) {
-  api = createApi(queue, { token: process.env.CONSOLE_TOKEN, publicDir: 'public', port: 0, repo, clientes });
-  console.log(`Console web ouvindo na porta ${await listen(api, Number(process.env.CONSOLE_PORTA ?? 8090))}`);
-} else {
-  console.log('Console web desligado (defina CONSOLE_TOKEN para ligar)');
+// Console web: pessoas entram com usuário e senha. Na primeira subida cria o administrador inicial.
+if ((await repo.listarUsuarios()).length === 0) {
+  const login = (process.env.ADMIN_LOGIN ?? 'admin').toLowerCase();
+  const senha = process.env.ADMIN_SENHA ?? randomBytes(9).toString('base64url');
+  await repo.criarUsuario({ login, nome: 'Administrador', papel: 'admin', senhaHash: await hashSenha(senha) });
+  console.log(`Administrador criado: login "${login}"${process.env.ADMIN_SENHA ? '' : `, senha "${senha}" (anote e troque em Usuários)`}`);
 }
+const api = createApi(queue, { token: process.env.CONSOLE_TOKEN, publicDir: 'public', port: 0, repo, clientes });
+console.log(`Console web ouvindo na porta ${await listen(api, Number(process.env.CONSOLE_PORTA ?? 8090))}`);
 setInterval(() => queue.reativarVencidas(), 30_000).unref();
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    Promise.all([receiver.stop(), surgard?.stop(), api ? new Promise<void>((r) => api!.close(() => r())) : undefined])
+    Promise.all([receiver.stop(), surgard?.stop(), new Promise<void>((r) => api.close(() => r()))])
       .then(() => gravacao)
       .then(() => repo.fechar())
       .finally(() => process.exit(0));

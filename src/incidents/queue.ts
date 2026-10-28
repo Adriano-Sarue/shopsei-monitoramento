@@ -68,6 +68,10 @@ export class IncidentQueue {
     return disponivel ? this.distribute() : [];
   }
 
+  estaDisponivel(nome: string): boolean {
+    return this.operators.get(nome)?.disponivel ?? false;
+  }
+
   // Recebe um evento. Devolve a ocorrência afetada, se houver.
   handleEvent(e: AlarmEvent): Ocorrencia | undefined {
     if (e.qualifier === 'restore') return this.noteRestore(e);

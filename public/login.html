@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrar · Shop Sei Monitoramento</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body class="login-pagina">
+<form id="form" class="cartao login-caixa" autocomplete="on">
+  <div class="logo-grande">S</div>
+  <h1>Shop Sei Monitoramento</h1>
+  <p class="mute">Entre com seu usuário e senha.</p>
+  <label>Usuário <input id="login" name="username" autocomplete="username" autocapitalize="none" required autofocus></label>
+  <label>Senha <input id="senha" name="password" type="password" autocomplete="current-password" required></label>
+  <div id="msg" class="msg" role="alert"></div>
+  <button class="marca-btn" id="entrar" type="submit">Entrar</button>
+</form>
+<script src="/app.js"></script>
+<script>
+$('form').onsubmit = async (ev) => {
+  ev.preventDefault();
+  $('entrar').disabled = true; mensagem('msg', '');
+  try {
+    await api('/api/login', { method: 'POST', body: JSON.stringify({ login: $('login').value, senha: $('senha').value }) });
+    location.href = '/';
+  } catch (e) { mensagem('msg', e.message, 'erro'); $('senha').value = ''; $('senha').focus(); }
+  finally { $('entrar').disabled = false; }
+};
+</script>
+</body>
+</html>

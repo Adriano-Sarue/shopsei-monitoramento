@@ -3,11 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type { IncidentQueue, Ocorrencia } from '../incidents/queue.js';
-import { ContaDuplicadaError, type Cliente, type ClienteIndex, type NovoCliente, type Repositorio } from '../store/repositorio.js';
+import { conferirSenha, hashSenha, SENHA_MINIMA } from '../auth/senha.js';
+import { Sessoes, type Sessao } from '../auth/sessoes.js';
+import { ContaDuplicadaError, LoginDuplicadoError, type Cliente, type ClienteIndex, type NovoCliente, type Papel, type Repositorio, type Usuario } from '../store/repositorio.js';
 
 export interface ApiOptions {
-  // Token compartilhado exigido em todas as chamadas /api (cabeçalho Authorization: Bearer).
-  token: string;
+  // Token de serviço opcional (Authorization: Bearer): acesso de administrador para scripts. Pessoas entram por login.
+  token?: string;
+  sessoes?: Sessoes;
   publicDir: string;
   host?: string;
   port: number;
@@ -46,10 +49,50 @@ function resumo(o: Ocorrencia, cliente?: Cliente) {
   };
 }
 
-function tokenOk(req: IncomingMessage, token: string): boolean {
-  const given = Buffer.from((req.headers.authorization ?? '').replace(/^Bearer\s+/i, ''));
+function tokenOk(req: IncomingMessage, token: string | undefined): boolean {
+  if (!token) return false;
+  const header = req.headers.authorization ?? '';
+  if (!/^Bearer\s/i.test(header)) return false;
+  const given = Buffer.from(header.replace(/^Bearer\s+/i, ''));
   const expected = Buffer.from(token);
   return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
+const COOKIE = 'shopsei_sessao';
+
+function cookieDe(req: IncomingMessage): string | undefined {
+  for (const parte of (req.headers.cookie ?? '').split(';')) {
+    const [k, ...v] = parte.trim().split('=');
+    if (k === COOKIE) return v.join('=');
+  }
+  return undefined;
+}
+
+function cookieSessao(req: IncomingMessage, token: string, maxAge: number): string {
+  const seguro = req.headers['x-forwarded-proto'] === 'https' || process.env.COOKIE_SEGURO === '1';
+  return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${seguro ? '; Secure' : ''}`;
+}
+
+// Quem está chamando: uma pessoa com sessão, ou o token de serviço (que informa o operador no corpo).
+interface Quem {
+  nome?: string;
+  papel: Papel;
+  sessao?: Sessao;
+  token?: string;
+}
+
+const PAGINAS: Record<string, { arquivo: string; tipo: string; publica?: boolean; admin?: boolean }> = {
+  '/': { arquivo: 'index.html', tipo: 'text/html' },
+  '/index.html': { arquivo: 'index.html', tipo: 'text/html' },
+  '/clientes.html': { arquivo: 'clientes.html', tipo: 'text/html', admin: true },
+  '/usuarios.html': { arquivo: 'usuarios.html', tipo: 'text/html', admin: true },
+  '/login.html': { arquivo: 'login.html', tipo: 'text/html', publica: true },
+  '/app.css': { arquivo: 'app.css', tipo: 'text/css', publica: true },
+  '/app.js': { arquivo: 'app.js', tipo: 'application/javascript', publica: true },
+};
+
+function usuarioPublico(u: Usuario) {
+  return { id: u.id, login: u.login, nome: u.nome, papel: u.papel, ativo: u.ativo };
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -64,8 +107,8 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
 
-function send(res: ServerResponse, status: number, body: unknown, type = 'application/json'): void {
-  res.writeHead(status, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-store' });
+function send(res: ServerResponse, status: number, body: unknown, type = 'application/json', extra: Record<string, string> = {}): void {
+  res.writeHead(status, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...extra });
   res.end(typeof body === 'string' ? body : JSON.stringify(body));
 }
 
@@ -75,31 +118,116 @@ function text(v: unknown, campo: string): string {
 }
 
 export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
-  if (!opts.token) throw new Error('Token do console não definido');
+  if (!opts.token && !opts.repo) throw new Error('Defina um token de serviço ou um repositório de usuários');
+  const sessoes = opts.sessoes ?? new Sessoes();
+
+  const quem = (req: IncomingMessage): Quem | undefined => {
+    const sessao = sessoes.obter(cookieDe(req));
+    if (sessao) return { nome: sessao.nome, papel: sessao.papel, sessao, token: cookieDe(req) };
+    if (tokenOk(req, opts.token)) return { papel: 'admin' };
+    return undefined;
+  };
 
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
-      const pagina = url.pathname === '/' ? 'index.html' : url.pathname === '/index.html' || url.pathname === '/clientes.html' ? url.pathname.slice(1) : undefined;
+      const q = quem(req);
+      const pagina = PAGINAS[url.pathname];
       if (req.method === 'GET' && pagina) {
-        return send(res, 200, await readFile(join(opts.publicDir, pagina), 'utf8'), 'text/html');
+        if (!pagina.publica && !q) return send(res, 302, '', 'text/plain', { location: '/login.html' });
+        if (pagina.admin && q?.papel !== 'admin') return send(res, 302, '', 'text/plain', { location: '/' });
+        if (url.pathname === '/login.html' && q?.sessao) return send(res, 302, '', 'text/plain', { location: '/' });
+        const html = await readFile(join(opts.publicDir, pagina.arquivo), 'utf8');
+        return send(res, 200, html, pagina.tipo, pagina.publica ? {} : { 'cache-control': 'no-store' });
       }
       if (!url.pathname.startsWith('/api/')) return send(res, 404, { erro: 'Não encontrado' });
-      if (!tokenOk(req, opts.token)) return send(res, 401, { erro: 'Token inválido' });
+
+      // Chamadas que mudam algo só valem como JSON: formulários de outros sites não conseguem enviá-las.
+      if (req.method !== 'GET' && !/^application\/json/i.test(req.headers['content-type'] ?? '')) {
+        return send(res, 415, { erro: 'Use application/json' });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/login') {
+        if (!opts.repo) return send(res, 501, { erro: 'Login não está ligado' });
+        const body = await readJson(req);
+        const login = String(body.login ?? '').trim().toLowerCase();
+        const chave = `${login}|${req.socket.remoteAddress}`;
+        if (sessoes.bloqueado(chave)) return send(res, 429, { erro: 'Muitas tentativas. Aguarde alguns minutos.' });
+        const u = await opts.repo.buscarUsuario(login);
+        const certo = await conferirSenha(String(body.senha ?? ''), u?.senhaHash);
+        if (!u || !u.ativo || !certo) {
+          sessoes.registrarFalha(chave);
+          return send(res, 401, { erro: 'Usuário ou senha incorretos' });
+        }
+        sessoes.limparFalhas(chave);
+        const token = sessoes.criar({ usuarioId: u.id, login: u.login, nome: u.nome, papel: u.papel });
+        return send(res, 200, usuarioPublico(u), 'application/json', { 'set-cookie': cookieSessao(req, token, 12 * 3600) });
+      }
+      if (!q) return send(res, 401, { erro: 'Faça login' });
+
+      if (req.method === 'POST' && url.pathname === '/api/logout') {
+        if (q.nome) queue.setOperator(q.nome, false);
+        sessoes.encerrar(q.token);
+        return send(res, 200, { ok: true }, 'application/json', { 'set-cookie': cookieSessao(req, '', 0) });
+      }
+      if (req.method === 'GET' && url.pathname === '/api/eu') {
+        return send(res, 200, { login: q.sessao?.login ?? null, nome: q.nome ?? null, papel: q.papel, disponivel: q.nome ? queue.estaDisponivel(q.nome) : false });
+      }
+
+      // Administração de usuários.
+      if (url.pathname === '/api/usuarios' || /^\/api\/usuarios\/\d+$/.test(url.pathname)) {
+        if (q.papel !== 'admin') return send(res, 403, { erro: 'Só administradores' });
+        if (!opts.repo) return send(res, 501, { erro: 'Usuários não estão ligados' });
+        const senhaNova = (v: unknown): string => {
+          if (typeof v !== 'string' || v.length < SENHA_MINIMA) throw new Error(`A senha precisa ter ao menos ${SENHA_MINIMA} caracteres`);
+          return v;
+        };
+        try {
+          if (req.method === 'GET') return send(res, 200, (await opts.repo.listarUsuarios()).map(usuarioPublico));
+          const body = await readJson(req);
+          if (req.method === 'POST' && url.pathname === '/api/usuarios') {
+            const u = await opts.repo.criarUsuario({
+              login: String(body.login ?? ''), nome: String(body.nome ?? ''), papel: body.papel as Papel, senhaHash: await hashSenha(senhaNova(body.senha)),
+            });
+            return send(res, 201, usuarioPublico(u));
+          }
+          if (req.method === 'PUT') {
+            const id = Number(url.pathname.split('/').pop());
+            if (q.sessao?.usuarioId === id && (body.ativo === false || (body.papel && body.papel !== 'admin'))) {
+              throw new Error('Você não pode desativar nem rebaixar a si mesmo');
+            }
+            const mudancas: Partial<Pick<Usuario, 'nome' | 'papel' | 'ativo' | 'senhaHash'>> = {};
+            if (typeof body.nome === 'string') mudancas.nome = body.nome;
+            if (body.papel !== undefined) mudancas.papel = body.papel as Papel;
+            if (typeof body.ativo === 'boolean') mudancas.ativo = body.ativo;
+            if (body.senha !== undefined) mudancas.senhaHash = await hashSenha(senhaNova(body.senha));
+            const u = await opts.repo.atualizarUsuario(id, mudancas);
+            if (!u.ativo || mudancas.senhaHash || mudancas.papel) {
+              sessoes.revogarUsuario(id);
+              queue.setOperator(u.nome, false);
+            }
+            return send(res, 200, usuarioPublico(u));
+          }
+          return send(res, 405, { erro: 'Método não permitido' });
+        } catch (err) {
+          if (err instanceof LoginDuplicadoError) return send(res, 409, { erro: err.message });
+          throw err;
+        }
+      }
 
       if (req.method === 'GET' && url.pathname === '/api/ocorrencias') {
         return send(res, 200, queue.list().filter((o) => o.situacao !== 'encerrada').map((o) => resumo(o, opts.clientes?.porConta(o.conta))));
       }
       if (req.method === 'POST' && url.pathname === '/api/operadores') {
         const body = await readJson(req);
-        queue.setOperator(text(body.nome, 'nome'), body.disponivel === true);
+        queue.setOperator(q.nome ?? text(body.nome, 'nome'), body.disponivel === true);
         return send(res, 200, { ok: true });
       }
       const m = /^\/api\/ocorrencias\/(\d+)\/(concluir|adiar)$/.exec(url.pathname);
       if (req.method === 'POST' && m) {
         const id = Number(m[1]);
         const body = await readJson(req);
-        const operador = text(body.operador, 'operador');
+        const operador = q.nome ?? text(body.operador, 'operador');
         if (m[2] === 'concluir') {
           const conclusao = typeof body.conclusao === 'string' ? body.conclusao : undefined;
           const o = queue.encerrar(id, operador, text(body.motivo, 'motivo'), conclusao);
@@ -111,6 +239,7 @@ export function createApi(queue: IncidentQueue, opts: ApiOptions): Server {
         return send(res, 200, resumo(o, opts.clientes?.porConta(o.conta)));
       }
       if (url.pathname === '/api/clientes' || /^\/api\/clientes\/\d+$/.test(url.pathname)) {
+        if (q.papel !== 'admin') return send(res, 403, { erro: 'Só administradores' });
         if (!opts.repo || !opts.clientes) return send(res, 501, { erro: 'Cadastro de clientes não está ligado' });
         if (req.method === 'GET' && url.pathname === '/api/clientes') return send(res, 200, await opts.repo.listarClientes());
         const entrada = (b: Record<string, unknown>): NovoCliente => ({

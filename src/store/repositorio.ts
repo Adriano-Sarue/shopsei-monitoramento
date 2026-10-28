@@ -24,6 +24,34 @@ export interface Cliente extends NovoCliente {
 }
 
 export class ContaDuplicadaError extends Error {}
+export class LoginDuplicadoError extends Error {}
+
+export type Papel = 'operador' | 'admin';
+
+export interface Usuario {
+  id: number;
+  login: string;
+  nome: string;
+  papel: Papel;
+  ativo: boolean;
+  senhaHash: string;
+}
+
+export interface NovoUsuario {
+  login: string;
+  nome: string;
+  papel: Papel;
+  senhaHash: string;
+}
+
+export function validarUsuario(u: { login: string; nome: string; papel: string }): { login: string; nome: string; papel: Papel } {
+  const login = u.login?.trim().toLowerCase();
+  if (!login || !/^[a-z0-9._-]{3,32}$/.test(login)) throw new Error('Login deve ter de 3 a 32 letras minúsculas, números, ponto, hífen ou sublinhado');
+  const nome = u.nome?.trim();
+  if (!nome) throw new Error('Nome é obrigatório');
+  if (u.papel !== 'operador' && u.papel !== 'admin') throw new Error('Perfil inválido');
+  return { login, nome, papel: u.papel };
+}
 
 // Contrato de persistência. Há uma implementação em PostgreSQL e uma em memória (testes e dev).
 export interface Repositorio {
@@ -34,6 +62,10 @@ export interface Repositorio {
   listarClientes(): Promise<Cliente[]>;
   criarCliente(c: NovoCliente): Promise<Cliente>;
   atualizarCliente(id: number, c: NovoCliente): Promise<Cliente>;
+  listarUsuarios(): Promise<Usuario[]>;
+  buscarUsuario(login: string): Promise<Usuario | undefined>;
+  criarUsuario(u: NovoUsuario): Promise<Usuario>;
+  atualizarUsuario(id: number, mudancas: Partial<Pick<Usuario, 'nome' | 'papel' | 'ativo' | 'senhaHash'>>): Promise<Usuario>;
   fechar(): Promise<void>;
 }
 
