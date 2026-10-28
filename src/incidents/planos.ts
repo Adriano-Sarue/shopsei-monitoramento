@@ -37,6 +37,26 @@ const PLANOS: { quando: (e: AlarmEvent) => boolean; passos: string[] }[] = [
     passos: ['Ligar para o local', 'Confirmado ou sem resposta: acionar o SAMU (192)', 'Ligar para as providências em ordem', 'Registrar o desfecho'],
   },
   {
+    quando: (e) => ['137', '144', '145', '341', '383', '344', '461', '413', 'TA', 'JA'].includes(e.code),
+    passos: [
+      'Violação de equipamento ou senha errada: pode ser tentativa de sabotagem',
+      'Conferir as câmeras do cliente, se houver',
+      'Ligar para o local e pedir a palavra-chave',
+      'Sem confirmação: tratar como disparo (providências e Polícia ou equipe de apoio)',
+      'Confirmado pelo cliente: abrir ordem de serviço para o técnico, se preciso',
+      'Registrar o desfecho',
+    ],
+  },
+  {
+    quando: (e) => ['306', '412', '625', '627', '628', 'LB', 'LX'].includes(e.code),
+    passos: [
+      'Conferir se havia técnico da empresa mexendo na central agora',
+      'Ninguém autorizado: ligar para o cliente e pedir a palavra-chave',
+      'Sem explicação: tratar como violação e avisar o responsável técnico',
+      'Registrar o desfecho',
+    ],
+  },
+  {
     quando: (e) => e.category === 'alarm',
     passos: [
       'Conferir as câmeras do cliente, se houver',
@@ -56,10 +76,10 @@ const PLANOS: { quando: (e: AlarmEvent) => boolean; passos: string[] }[] = [
     ],
   },
   {
-    quando: (e) => ['301', '302', '313', '384'].includes(e.code),
+    quando: (e) => ['301', '302', '309', '311', '313', '342', '384', 'AT', 'YT', 'XT'].includes(e.code),
     passos: [
       'Ver se já chegou a restauração',
-      'Ligar para o cliente e informar a falha de energia ou bateria',
+      'Ligar para o cliente e informar a falha de energia ou bateria (bateria de sensor: trocar a pilha do sensor indicado na zona)',
       'Persistindo: abrir ordem de serviço para o técnico',
       'Registrar o desfecho',
     ],
@@ -72,9 +92,22 @@ const PLANOS: { quando: (e: AlarmEvent) => boolean; passos: string[] }[] = [
 
 export const PREFIXO_PASSO = 'Passo concluído: ';
 
+// O evento mais urgente da ocorrência (o primeiro, em empate), sem contar restaurações.
+export function eventoPrincipal(o: Ocorrencia): AlarmEvent {
+  return [...o.eventos].filter((e) => e.qualifier !== 'restore').sort((a, b) => a.priority - b.priority)[0] ?? o.eventos[0]!;
+}
+
+// Título da ocorrência na fila: o evento principal, avisando se ele já foi restaurado.
+export function tituloOcorrencia(o: Ocorrencia): string {
+  const p = eventoPrincipal(o);
+  const i = o.eventos.indexOf(p);
+  const restaurado = p.qualifier !== 'restore' && o.eventos.slice(i + 1).some((e) => e.qualifier === 'restore' && e.code === p.code && e.zoneOrUser === p.zoneOrUser);
+  return restaurado ? `${p.description} (já restaurado)` : p.description;
+}
+
 export function planoPara(o: Ocorrencia, contaCadastrada: boolean): string[] {
   // O plano segue o evento mais urgente da ocorrência.
-  const principal = [...o.eventos].filter((e) => e.qualifier !== 'restore').sort((a, b) => a.priority - b.priority)[0] ?? o.eventos[0]!;
+  const principal = eventoPrincipal(o);
   const passos = PLANOS.find((p) => p.quando(principal))!.passos;
   return contaCadastrada ? passos : ['Conta não cadastrada: identificar o cliente e cadastrar', ...passos];
 }

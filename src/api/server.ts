@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
-import { planoPara, PREFIXO_PASSO } from '../incidents/planos.js';
+import { planoPara, PREFIXO_PASSO, tituloOcorrencia } from '../incidents/planos.js';
 import type { Ocorrencia } from '../incidents/queue.js';
 import type { Central } from '../central.js';
 import { conferirSenha, hashSenha, SENHA_MINIMA } from '../auth/senha.js';
@@ -48,7 +48,6 @@ function clienteResumo(c: Cliente | undefined, completo: boolean) {
 }
 
 function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false) {
-  const ultimo = o.eventos[o.eventos.length - 1]!;
   const cadastrada = comCadastro ? cliente !== undefined : o.contaCadastrada;
   const feitos = new Set(o.acoes.filter((a) => a.descricao.startsWith(PREFIXO_PASSO)).map((a) => a.descricao.slice(PREFIXO_PASSO.length)));
   return {
@@ -66,7 +65,7 @@ function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false) {
     eventos: o.eventos.map((e) => ({
       em: e.receivedAt, codigo: e.code, descricao: e.description, zona: e.zoneOrUser ?? null, protocolo: e.protocol,
     })),
-    resumo: ultimo.description,
+    resumo: tituloOcorrencia(o),
     plano: planoPara(o, cadastrada).map((passo) => ({ passo, feito: feitos.has(passo) })),
     acoes: o.acoes.map((a) => ({ em: a.em.toISOString(), operador: a.operador ?? null, descricao: a.descricao })),
   };
@@ -588,7 +587,7 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         const linhas = lista.map((o) => ({
           id: o.id, conta: o.conta, cliente: clientes.porConta(o.conta)?.nome ?? null, prioridade: o.prioridade,
           abertaEm: o.abertaEm.toISOString(), encerradaEm: o.encerradaEm?.toISOString() ?? null, operador: o.operador ?? null,
-          motivo: o.motivo ?? null, conclusao: o.conclusao ?? null, resumo: o.eventos[0]?.description ?? '', eventos: o.eventos.length,
+          motivo: o.motivo ?? null, conclusao: o.conclusao ?? null, resumo: o.eventos.length ? tituloOcorrencia(o) : '', eventos: o.eventos.length,
         }));
         if (!ehCsv) return send(res, 200, linhas);
         const cab = ['id', 'conta', 'cliente', 'prioridade', 'abertaEm', 'encerradaEm', 'operador', 'motivo', 'conclusao', 'resumo', 'eventos'] as const;
