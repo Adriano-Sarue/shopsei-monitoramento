@@ -5,6 +5,10 @@ CREATE TABLE clientes (
   nome          TEXT NOT NULL,
   endereco      TEXT,
   observacoes   TEXT,
+  tipo          TEXT,
+  -- Conferidas pelo operador ao atender (palavra-chave e contra-senha do cliente).
+  palavra_chave TEXT,
+  contra_senha  TEXT,
   ativo         BOOLEAN NOT NULL DEFAULT TRUE,
   criado_em     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -50,7 +54,7 @@ CREATE TABLE eventos (
 );
 CREATE INDEX eventos_conta_idx ON eventos (conta, recebido_em DESC);
 
-CREATE TYPE situacao_ocorrencia AS ENUM ('aguardando', 'em_atendimento', 'encerrada');
+CREATE TYPE situacao_ocorrencia AS ENUM ('aguardando', 'pendente', 'em_atendimento', 'encerrada');
 
 CREATE TABLE ocorrencias (
   id            BIGSERIAL PRIMARY KEY,
@@ -62,7 +66,9 @@ CREATE TABLE ocorrencias (
   aberta_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
   atendida_em   TIMESTAMPTZ,
   encerrada_em  TIMESTAMPTZ,
-  motivo_encerramento TEXT
+  motivo_encerramento TEXT,
+  conclusao     TEXT,
+  adiada_ate    TIMESTAMPTZ
 );
 CREATE INDEX ocorrencias_fila_idx ON ocorrencias (situacao, prioridade, aberta_em);
 

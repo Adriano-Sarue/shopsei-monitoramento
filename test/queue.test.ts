@@ -67,3 +67,17 @@ test('encerrar libera o operador para a próxima ocorrência e limita 3 simultâ
   q.encerrar(ids[0]!, 'Ana', 'Alarme falso, cliente confirmou');
   assert.equal(q.get(ids[3]!).operador, 'Ana');
 });
+
+test('adiar tira do operador e reativarVencidas devolve à fila no prazo', () => {
+  let agora = new Date('2026-10-28T11:00:00Z');
+  const q = new IncidentQueue({ now: () => agora });
+  q.setOperator('Ana', true);
+  const id = q.handleEvent(ev('1', '1301 00 000'))!.id;
+  q.adiar(id, 'Ana', new Date('2026-10-28T11:30:00Z'));
+  assert.equal(q.get(id).situacao, 'pendente');
+  assert.equal(q.get(id).operador, undefined);
+  assert.equal(q.reativarVencidas().length, 0);
+  agora = new Date('2026-10-28T11:31:00Z');
+  assert.equal(q.reativarVencidas().length, 1);
+  assert.equal(q.get(id).situacao, 'em_atendimento');
+});

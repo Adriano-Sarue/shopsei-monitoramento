@@ -1,6 +1,6 @@
 import type { AlarmEvent } from '../protocols/types.js';
 
-export type Situacao = 'aguardando' | 'em_atendimento' | 'encerrada';
+export type Situacao = 'aguardando' | 'pendente' | 'em_atendimento' | 'encerrada';
 
 export interface Ocorrencia {
   id: number;
@@ -13,6 +13,8 @@ export interface Ocorrencia {
   atendidaEm?: Date;
   encerradaEm?: Date;
   motivo?: string;
+  // Preenchido quando o operador adia: volta a "aguardando" a partir desse horário.
+  adiadaAte?: Date;
   eventos: AlarmEvent[];
   acoes: { em: Date; operador?: string; descricao: string }[];
 }
@@ -119,6 +121,30 @@ export class IncidentQueue {
 
   registrarAcao(id: number, operador: string, descricao: string): void {
     this.get(id).acoes.push({ em: this.now(), operador, descricao });
+  }
+
+  // Adia a ocorrência: sai do operador e fica "pendente" até o horário informado.
+  adiar(id: number, operador: string, ate: Date): Ocorrencia {
+    const incident = this.get(id);
+    if (incident.operador !== operador) throw new Error('Ocorrência está com outro operador');
+    incident.situacao = 'pendente';
+    incident.adiadaAte = ate;
+    incident.operador = undefined;
+    incident.acoes.push({ em: this.now(), operador, descricao: `Adiada até ${ate.toISOString()}` });
+    this.distribute();
+    return incident;
+  }
+
+  // Devolve à fila as ocorrências adiadas cujo prazo venceu. Chamar periodicamente.
+  reativarVencidas(): Ocorrencia[] {
+    const agora = this.now();
+    const vencidas = this.incidents.filter((i) => i.situacao === 'pendente' && i.adiadaAte && i.adiadaAte <= agora);
+    for (const i of vencidas) {
+      i.situacao = 'aguardando';
+      i.adiadaAte = undefined;
+    }
+    this.distribute();
+    return vencidas;
   }
 
   encerrar(id: number, operador: string, motivo: string): Ocorrencia {
