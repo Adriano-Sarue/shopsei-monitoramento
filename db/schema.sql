@@ -180,3 +180,32 @@ CREATE TABLE IF NOT EXISTS atendimentos_portaria (
   observacao TEXT
 );
 CREATE INDEX IF NOT EXISTS atendimentos_portaria_idx ON atendimentos_portaria (empresa_id, condominio_id, em DESC);
+
+-- Leitores faciais e interfones do condomínio (alcançados pela VPN). A senha fica cifrada (CHAVE_EQUIPAMENTOS).
+CREATE TABLE IF NOT EXISTS equipamentos_portaria (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id BIGINT NOT NULL REFERENCES empresas(id),
+  condominio_id BIGINT NOT NULL REFERENCES condominios(id) ON DELETE CASCADE,
+  nome TEXT NOT NULL,
+  marca TEXT NOT NULL,
+  endereco TEXT NOT NULL,
+  usuario TEXT NOT NULL,
+  senha_cifrada TEXT NOT NULL,
+  porta INTEGER NOT NULL DEFAULT 1,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  token_eventos TEXT NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS equipamentos_portaria_cond_idx ON equipamentos_portaria (condominio_id);
+
+-- Toda porta aberta pela tela do operador, com quem abriu e se o equipamento aceitou.
+CREATE TABLE IF NOT EXISTS aberturas_porta (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id BIGINT NOT NULL REFERENCES empresas(id),
+  condominio_id BIGINT NOT NULL REFERENCES condominios(id),
+  equipamento_id BIGINT REFERENCES equipamentos_portaria(id) ON DELETE SET NULL,
+  em TIMESTAMPTZ NOT NULL,
+  operador TEXT NOT NULL,
+  ok BOOLEAN NOT NULL,
+  erro TEXT
+);
+CREATE INDEX IF NOT EXISTS aberturas_porta_idx ON aberturas_porta (empresa_id, condominio_id, em DESC);

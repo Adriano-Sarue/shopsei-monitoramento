@@ -75,6 +75,39 @@ export interface FiltroAtendimentos {
   limite: number;
 }
 
+// Leitor facial ou interfone do condomínio, alcançado pela VPN.
+export interface NovoEquipamento {
+  nome: string;
+  marca: 'hikvision';
+  // Endereço na VPN, ex.: http://10.8.0.12
+  endereco: string;
+  usuario: string;
+  // Número da porta que o comando de abrir aciona (1 na maioria dos leitores).
+  porta: number;
+  ativo: boolean;
+}
+
+export interface Equipamento extends NovoEquipamento {
+  id: number;
+  condominioId: number;
+  empresaId: number;
+  // Senha cifrada pelo Cofre; nunca sai da API.
+  senhaCifrada: string;
+  // Parte secreta do endereço para onde o equipamento envia os eventos (/hik/<token>).
+  tokenEventos: string;
+}
+
+export interface Abertura {
+  id: number;
+  // Vazio se o equipamento foi apagado depois.
+  equipamentoId?: number;
+  condominioId: number;
+  em: Date;
+  operador: string;
+  ok: boolean;
+  erro?: string;
+}
+
 export interface RepoPortaria {
   listarCondominios(empresaId: number): Promise<Condominio[]>;
   criarCondominio(empresaId: number, c: NovoCondominio): Promise<Condominio>;
@@ -85,9 +118,39 @@ export interface RepoPortaria {
   removerUnidade(empresaId: number, condominioId: number, id: number): Promise<void>;
   registrarAtendimento(empresaId: number, a: NovoAtendimento, operador: string, em: Date): Promise<Atendimento>;
   listarAtendimentos(empresaId: number, f: FiltroAtendimentos): Promise<Atendimento[]>;
+  listarEquipamentos(empresaId: number, condominioId: number): Promise<Equipamento[]>;
+  // Todos os equipamentos ativos de condomínios ativos, de todas as empresas (para acompanhar as chamadas).
+  equipamentosAtivos(): Promise<Equipamento[]>;
+  buscarEquipamento(empresaId: number, id: number): Promise<Equipamento | undefined>;
+  equipamentoPorToken(token: string): Promise<Equipamento | undefined>;
+  // Sem senhaCifrada numa edição, a senha atual fica.
+  salvarEquipamento(empresaId: number, condominioId: number, e: NovoEquipamento & { id?: number; senhaCifrada?: string }): Promise<Equipamento>;
+  removerEquipamento(empresaId: number, condominioId: number, id: number): Promise<void>;
+  registrarAbertura(empresaId: number, a: Omit<Abertura, 'id'>): Promise<Abertura>;
+  listarAberturas(empresaId: number, condominioId: number, limite: number): Promise<Abertura[]>;
 }
 
 export class UnidadeDuplicadaError extends Error {}
+
+export function validarEquipamento(e: NovoEquipamento): NovoEquipamento {
+  const nome = curto(e.nome, 80, 'Nome');
+  if (!nome) throw new Error('Nome do equipamento é obrigatório (ex.: Portão social)');
+  if (e.marca !== 'hikvision') throw new Error('Marca não suportada (por enquanto só Hikvision)');
+  const endereco = curto(e.endereco, 200, 'Endereço')?.replace(/\/+$/, '');
+  let url: URL;
+  try {
+    url = new URL(endereco ?? '');
+  } catch {
+    throw new Error('Endereço do equipamento inválido (ex.: http://10.8.0.12)');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Endereço do equipamento deve começar com http:// ou https://');
+  if (url.username || url.password || (url.pathname !== '/' && url.pathname !== '') || url.search) throw new Error('Informe só o endereço do equipamento, sem caminho nem senha (ex.: http://10.8.0.12)');
+  const usuario = curto(e.usuario, 60, 'Usuário');
+  if (!usuario) throw new Error('Usuário do equipamento é obrigatório');
+  const porta = Number(e.porta ?? 1);
+  if (!Number.isInteger(porta) || porta < 1 || porta > 8) throw new Error('Porta deve ser de 1 a 8');
+  return { nome, marca: 'hikvision', endereco: `${url.protocol}//${url.host}`, usuario, porta, ativo: e.ativo !== false };
+}
 
 const curto = (v: unknown, max: number, campo: string): string | undefined => {
   if (v === undefined || v === null) return undefined;

@@ -13,6 +13,12 @@
     <div id="lista"></div>
     <div id="detalhe" hidden>
       <div class="linha-titulo" style="margin-top:18px">
+        <h2 style="font-size:17px">Equipamentos</h2>
+        <button type="button" id="novo-equip">+ Equipamento</button>
+      </div>
+      <p class="mute" style="margin:4px 0 8px">Leitor facial ou interfone Hikvision do condomínio, alcançado pela VPN. O operador abre a porta e vê as chamadas pela tela da Portaria.</p>
+      <div id="equipamentos"></div>
+      <div class="linha-titulo" style="margin-top:18px">
         <h2 id="titulo-unidades" style="font-size:17px">Unidades</h2>
         <div style="display:flex;gap:6px"><button type="button" id="nova-unidade" class="marca-btn">+ Unidade</button><button type="button" id="importar">Importar do Excel</button></div>
       </div>
@@ -49,7 +55,74 @@ async function abrir(c) {
   $('detalhe').hidden = false; $('titulo-unidades').textContent = 'Unidades de ' + c.nome;
   mensagem('msg', '');
   desenharLista();
-  await carregarUnidades();
+  await Promise.all([carregarUnidades(), carregarEquipamentos()]);
+}
+
+async function carregarEquipamentos() {
+  const lista = await api('/api/portaria/condominios/' + atual.id + '/equipamentos');
+  if (!lista.length) return $('equipamentos').replaceChildren(el('div', 'vazio', 'Nenhum equipamento. Cadastre o leitor do portão para abrir a porta e receber chamadas pela tela.'));
+  $('equipamentos').replaceChildren(...lista.map((e) => {
+    const d = el('div', 'cartao item' + (e.ativo ? '' : ' inativo'));
+    const t = el('div');
+    const titulo = el('div', 'disp'); titulo.append(el('span', 'bolinha' + (e.online ? ' on' : '')), el('strong', '', e.nome));
+    t.append(titulo, el('div', 'mute', e.endereco + ' · usuário ' + e.usuario + ' · porta ' + e.porta + (e.ativo ? '' : ' · desativado')));
+    if (!e.online && e.erro) t.append(el('div', 'aviso', e.erro));
+    const msg = el('div', 'mute'); t.append(msg);
+    const b = el('div'); b.style.display = 'flex'; b.style.gap = '6px'; b.style.flexWrap = 'wrap'; b.style.justifyContent = 'flex-end';
+    const testar = el('button', '', 'Testar');
+    testar.onclick = async () => {
+      msg.textContent = 'Testando...'; msg.className = 'mute';
+      try { const i = await api('/api/portaria/equipamentos/' + e.id + '/testar', { method: 'POST', body: '{}' }); msg.textContent = 'Conectado: ' + [i.modelo, i.firmware].filter(Boolean).join(' · '); msg.className = 'msg ok'; }
+      catch (err) { msg.textContent = err.message; msg.className = 'msg erro'; }
+    };
+    const envio = el('button', '', 'Ligar envio de eventos');
+    envio.title = 'Configura o equipamento para mandar acessos e rostos não reconhecidos a este sistema';
+    envio.onclick = async () => {
+      try { await api('/api/portaria/equipamentos/' + e.id + '/configurar-envio', { method: 'POST', body: '{}' }); msg.textContent = 'Envio de eventos configurado no equipamento'; msg.className = 'msg ok'; }
+      catch (err) { msg.textContent = err.message; msg.className = 'msg erro'; }
+    };
+    const ed = el('button', '', 'Editar'); ed.onclick = () => editarEquipamento(e);
+    b.append(testar, envio, ed);
+    d.append(t, b); return d;
+  }));
+}
+
+function editarEquipamento(e) {
+  const dlg = el('dialog');
+  const form = el('form');
+  form.append(el('h3', '', e ? 'Editar ' + e.nome : 'Novo equipamento'), el('p', 'mute', 'Use o endereço do equipamento dentro da VPN do condomínio e um usuário do próprio equipamento (crie um só para o sistema).'));
+  const campo = (rotulo, valor, o = {}) => { const l = el('label', '', rotulo); const i = el('input'); i.value = valor ?? ''; Object.assign(i, o); l.append(i); form.append(l); return i; };
+  const nome = campo('Nome', e && e.nome, { required: true, maxLength: 80, placeholder: 'Portão social' });
+  const end = campo('Endereço na VPN', e && e.endereco, { required: true, placeholder: 'http://10.8.0.12' });
+  const usu = campo('Usuário do equipamento', e ? e.usuario : 'admin', { required: true, autocomplete: 'off' });
+  const sen = campo(e ? 'Senha (deixe em branco para manter)' : 'Senha do equipamento', '', { type: 'password', required: !e, autocomplete: 'new-password' });
+  const porta = campo('Número da porta', e ? e.porta : 1, { type: 'number', min: 1, max: 8 });
+  const lat = el('label', 'passo'); const ativo = el('input'); ativo.type = 'checkbox'; ativo.checked = e ? e.ativo : true; lat.append(ativo, document.createTextNode(' Ativo')); form.append(lat);
+  const erro = el('div', 'msg erro');
+  const botoes = el('div', 'botoes');
+  if (e) {
+    const apagar = el('button', 'perigo', 'Remover'); apagar.type = 'button'; apagar.style.marginRight = 'auto';
+    apagar.onclick = async () => {
+      if (apagar.dataset.confirmar !== '1') { apagar.dataset.confirmar = '1'; apagar.textContent = 'Confirmar remoção'; return; }
+      try { await api('/api/portaria/condominios/' + atual.id + '/equipamentos/' + e.id, { method: 'DELETE', body: '{}' }); dlg.close(); carregarEquipamentos(); } catch (err) { erro.textContent = err.message; }
+    };
+    botoes.append(apagar);
+  }
+  const cancelar = el('button', '', 'Cancelar'); cancelar.type = 'button'; cancelar.onclick = () => dlg.close();
+  const ok = el('button', 'marca-btn', 'Salvar'); ok.type = 'submit';
+  botoes.append(cancelar, ok);
+  form.append(erro, botoes);
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const corpo = JSON.stringify({ nome: nome.value, endereco: end.value, usuario: usu.value, senha: sen.value, porta: Number(porta.value) || 1, ativo: ativo.checked });
+    try {
+      if (e) await api('/api/portaria/condominios/' + atual.id + '/equipamentos/' + e.id, { method: 'PUT', body: corpo });
+      else await api('/api/portaria/condominios/' + atual.id + '/equipamentos', { method: 'POST', body: corpo });
+      dlg.close(); toast('Equipamento salvo'); carregarEquipamentos();
+    } catch (err) { erro.textContent = err.message; }
+  };
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.append(form); document.body.append(dlg); dlg.showModal();
 }
 
 function desenharLista() {
@@ -193,6 +266,7 @@ $('ativar').onclick = async () => {
 };
 $('limpar').onclick = limpar;
 $('nova-unidade').onclick = () => editarUnidade(null);
+$('novo-equip').onclick = () => editarEquipamento(null);
 $('importar').onclick = importar;
 $('filtro').oninput = desenharUnidades;
 (async () => { await iniciarTopo('condominios'); await carregarCondominios(); limpar(); })();

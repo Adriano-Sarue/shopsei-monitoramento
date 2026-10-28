@@ -1,7 +1,8 @@
+import { randomBytes } from 'node:crypto';
 import { NaoEncontradoError } from '../store/repositorio.js';
 import {
-  rotuloUnidade, UnidadeDuplicadaError, validarAtendimento, validarCondominio, validarUnidade,
-  type Atendimento, type Condominio, type FiltroAtendimentos, type NovaUnidade, type NovoAtendimento, type NovoCondominio, type RepoPortaria, type Unidade,
+  rotuloUnidade, UnidadeDuplicadaError, validarAtendimento, validarCondominio, validarEquipamento, validarUnidade,
+  type Abertura, type Atendimento, type Equipamento, type NovoEquipamento, type Condominio, type FiltroAtendimentos, type NovaUnidade, type NovoAtendimento, type NovoCondominio, type RepoPortaria, type Unidade,
 } from './tipos.js';
 
 type Guardado<T> = T & { empresaId: number };
@@ -10,6 +11,8 @@ export class PortariaMemoria implements RepoPortaria {
   private readonly condominios: Guardado<Omit<Condominio, 'unidades'>>[] = [];
   private readonly unidades: Unidade[] = [];
   private readonly atendimentos: Guardado<Atendimento>[] = [];
+  private readonly equipamentos: Equipamento[] = [];
+  private readonly aberturas: Guardado<Abertura>[] = [];
   private seq = 1;
 
   private cond(empresaId: number, id: number) {
@@ -85,6 +88,67 @@ export class PortariaMemoria implements RepoPortaria {
       .filter((a) => a.empresaId === empresaId && (!f.condominioId || a.condominioId === f.condominioId) && (!f.de || a.em >= f.de) && (!f.ate || a.em <= f.ate))
       .sort((a, b) => b.em.getTime() - a.em.getTime() || b.id - a.id)
       .slice(0, f.limite)
+      .map((a) => {
+        const { empresaId: _, ...resto } = structuredClone(a);
+        return resto;
+      });
+  }
+
+  async listarEquipamentos(empresaId: number, condominioId: number): Promise<Equipamento[]> {
+    this.cond(empresaId, condominioId);
+    return structuredClone(this.equipamentos.filter((e) => e.condominioId === condominioId));
+  }
+
+  async equipamentosAtivos(): Promise<Equipamento[]> {
+    const ativos = new Set(this.condominios.filter((c) => c.ativo).map((c) => c.id));
+    return structuredClone(this.equipamentos.filter((e) => e.ativo && ativos.has(e.condominioId)));
+  }
+
+  async buscarEquipamento(empresaId: number, id: number): Promise<Equipamento | undefined> {
+    const e = this.equipamentos.find((x) => x.id === id && x.empresaId === empresaId);
+    return e && structuredClone(e);
+  }
+
+  async equipamentoPorToken(token: string): Promise<Equipamento | undefined> {
+    const e = this.equipamentos.find((x) => x.tokenEventos === token);
+    return e && structuredClone(e);
+  }
+
+  async salvarEquipamento(empresaId: number, condominioId: number, entrada: NovoEquipamento & { id?: number; senhaCifrada?: string }): Promise<Equipamento> {
+    this.cond(empresaId, condominioId);
+    const v = validarEquipamento(entrada);
+    if (entrada.id !== undefined) {
+      const e = this.equipamentos.find((x) => x.id === entrada.id && x.condominioId === condominioId);
+      if (!e) throw new NaoEncontradoError(`Equipamento ${entrada.id} não existe`);
+      Object.assign(e, v, { senhaCifrada: entrada.senhaCifrada ?? e.senhaCifrada });
+      return structuredClone(e);
+    }
+    if (!entrada.senhaCifrada) throw new Error('Senha do equipamento é obrigatória');
+    const e: Equipamento = { ...v, id: this.seq++, condominioId, empresaId, senhaCifrada: entrada.senhaCifrada, tokenEventos: randomBytes(18).toString('base64url') };
+    this.equipamentos.push(e);
+    return structuredClone(e);
+  }
+
+  async removerEquipamento(empresaId: number, condominioId: number, id: number): Promise<void> {
+    this.cond(empresaId, condominioId);
+    const i = this.equipamentos.findIndex((e) => e.id === id && e.condominioId === condominioId);
+    if (i < 0) throw new NaoEncontradoError(`Equipamento ${id} não existe`);
+    this.equipamentos.splice(i, 1);
+    for (const a of this.aberturas) if (a.equipamentoId === id) a.equipamentoId = undefined;
+  }
+
+  async registrarAbertura(empresaId: number, a: Omit<Abertura, 'id'>): Promise<Abertura> {
+    const g = { ...structuredClone(a), id: this.seq++, empresaId };
+    this.aberturas.push(g);
+    const { empresaId: _, ...resto } = structuredClone(g);
+    return resto;
+  }
+
+  async listarAberturas(empresaId: number, condominioId: number, limite: number): Promise<Abertura[]> {
+    return this.aberturas
+      .filter((a) => a.empresaId === empresaId && a.condominioId === condominioId)
+      .sort((a, b) => b.em.getTime() - a.em.getTime() || b.id - a.id)
+      .slice(0, limite)
       .map((a) => {
         const { empresaId: _, ...resto } = structuredClone(a);
         return resto;

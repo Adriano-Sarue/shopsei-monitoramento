@@ -1,8 +1,9 @@
+import { randomBytes } from 'node:crypto';
 import type pg from 'pg';
 import { NaoEncontradoError } from '../store/repositorio.js';
 import {
-  rotuloUnidade, UnidadeDuplicadaError, validarAtendimento, validarCondominio, validarUnidade,
-  type Atendimento, type Condominio, type FiltroAtendimentos, type NovaUnidade, type NovoAtendimento, type NovoCondominio, type Pessoa, type RepoPortaria, type Unidade,
+  rotuloUnidade, UnidadeDuplicadaError, validarAtendimento, validarCondominio, validarEquipamento, validarUnidade,
+  type Abertura, type Atendimento, type Equipamento, type NovoEquipamento, type Condominio, type FiltroAtendimentos, type NovaUnidade, type NovoAtendimento, type NovoCondominio, type Pessoa, type RepoPortaria, type Unidade,
 } from './tipos.js';
 
 const duplicado = (err: unknown) => (err as { code?: string }).code === '23505';
@@ -30,6 +31,21 @@ function atendimento(r: Record<string, unknown>): Atendimento {
     unidade: ou(r.unidade as string | null), em: r.em as Date, operador: r.operador as string, tipo: r.tipo as Atendimento['tipo'],
     visitante: r.visitante as string, documento: ou(r.documento as string | null), decisao: r.decisao as Atendimento['decisao'],
     autorizadoPor: ou(r.autorizado_por as string | null), observacao: ou(r.observacao as string | null),
+  };
+}
+
+function equipamento(r: Record<string, unknown>): Equipamento {
+  return {
+    id: Number(r.id), empresaId: Number(r.empresa_id), condominioId: Number(r.condominio_id), nome: r.nome as string, marca: r.marca as 'hikvision',
+    endereco: r.endereco as string, usuario: r.usuario as string, senhaCifrada: r.senha_cifrada as string, porta: Number(r.porta),
+    ativo: r.ativo as boolean, tokenEventos: r.token_eventos as string,
+  };
+}
+
+function abertura(r: Record<string, unknown>): Abertura {
+  return {
+    id: Number(r.id), condominioId: Number(r.condominio_id), equipamentoId: r.equipamento_id === null ? undefined : Number(r.equipamento_id),
+    em: r.em as Date, operador: r.operador as string, ok: r.ok as boolean, erro: ou(r.erro as string | null),
   };
 }
 
@@ -115,5 +131,63 @@ export class PortariaPg implements RepoPortaria {
        AND ($3::timestamptz IS NULL OR em >= $3) AND ($4::timestamptz IS NULL OR em <= $4) ORDER BY em DESC, id DESC LIMIT $5`,
       [empresaId, f.condominioId ?? null, f.de ?? null, f.ate ?? null, f.limite]);
     return rows.map(atendimento);
+  }
+
+  async listarEquipamentos(empresaId: number, condominioId: number): Promise<Equipamento[]> {
+    await this.exigirCondominio(empresaId, condominioId);
+    const { rows } = await this.pool.query('SELECT * FROM equipamentos_portaria WHERE condominio_id = $1 ORDER BY id', [condominioId]);
+    return rows.map(equipamento);
+  }
+
+  async equipamentosAtivos(): Promise<Equipamento[]> {
+    const { rows } = await this.pool.query(`SELECT e.* FROM equipamentos_portaria e JOIN condominios c ON c.id = e.condominio_id
+      WHERE e.ativo AND c.ativo ORDER BY e.id`);
+    return rows.map(equipamento);
+  }
+
+  async buscarEquipamento(empresaId: number, id: number): Promise<Equipamento | undefined> {
+    const { rows } = await this.pool.query('SELECT * FROM equipamentos_portaria WHERE id = $1 AND empresa_id = $2', [id, empresaId]);
+    return rows[0] && equipamento(rows[0]);
+  }
+
+  async equipamentoPorToken(token: string): Promise<Equipamento | undefined> {
+    const { rows } = await this.pool.query('SELECT * FROM equipamentos_portaria WHERE token_eventos = $1', [token]);
+    return rows[0] && equipamento(rows[0]);
+  }
+
+  async salvarEquipamento(empresaId: number, condominioId: number, entrada: NovoEquipamento & { id?: number; senhaCifrada?: string }): Promise<Equipamento> {
+    await this.exigirCondominio(empresaId, condominioId);
+    const v = validarEquipamento(entrada);
+    const valores = [condominioId, v.nome, v.marca, v.endereco, v.usuario, v.porta, v.ativo];
+    if (entrada.id !== undefined) {
+      const { rows } = await this.pool.query(
+        `UPDATE equipamentos_portaria SET nome = $2, marca = $3, endereco = $4, usuario = $5, porta = $6, ativo = $7, senha_cifrada = COALESCE($8, senha_cifrada)
+         WHERE condominio_id = $1 AND id = $9 RETURNING *`, [...valores, entrada.senhaCifrada ?? null, entrada.id]);
+      if (!rows[0]) throw new NaoEncontradoError(`Equipamento ${entrada.id} não existe`);
+      return equipamento(rows[0]);
+    }
+    if (!entrada.senhaCifrada) throw new Error('Senha do equipamento é obrigatória');
+    const { rows } = await this.pool.query(
+      `INSERT INTO equipamentos_portaria (condominio_id, nome, marca, endereco, usuario, porta, ativo, senha_cifrada, token_eventos, empresa_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`, [...valores, entrada.senhaCifrada, randomBytes(18).toString('base64url'), empresaId]);
+    return equipamento(rows[0]);
+  }
+
+  async removerEquipamento(empresaId: number, condominioId: number, id: number): Promise<void> {
+    await this.exigirCondominio(empresaId, condominioId);
+    const { rowCount } = await this.pool.query('DELETE FROM equipamentos_portaria WHERE condominio_id = $1 AND id = $2', [condominioId, id]);
+    if (!rowCount) throw new NaoEncontradoError(`Equipamento ${id} não existe`);
+  }
+
+  async registrarAbertura(empresaId: number, a: Omit<Abertura, 'id'>): Promise<Abertura> {
+    const { rows } = await this.pool.query(
+      `INSERT INTO aberturas_porta (empresa_id, condominio_id, equipamento_id, em, operador, ok, erro) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [empresaId, a.condominioId, a.equipamentoId ?? null, a.em, a.operador, a.ok, a.erro ?? null]);
+    return abertura(rows[0]);
+  }
+
+  async listarAberturas(empresaId: number, condominioId: number, limite: number): Promise<Abertura[]> {
+    const { rows } = await this.pool.query('SELECT * FROM aberturas_porta WHERE empresa_id = $1 AND condominio_id = $2 ORDER BY em DESC, id DESC LIMIT $3', [empresaId, condominioId, limite]);
+    return rows.map(abertura);
   }
 }

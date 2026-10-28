@@ -79,8 +79,35 @@ async function contrato(p: RepoPortaria, a: number, b: number): Promise<void> {
   const depois = (await p.listarAtendimentos(a, { limite: 10 })).find((x) => x.visitante === 'iFood')!;
   assert.deepEqual([depois.unidade, depois.unidadeId], ['A 101', undefined]);
 
+  // Equipamentos: endereço só do equipamento, senha obrigatória ao criar e mantida ao editar.
+  const base = { nome: 'Portão social', marca: 'hikvision' as const, endereco: 'http://10.8.0.12/', usuario: 'admin', porta: 1, ativo: true };
+  await assert.rejects(p.salvarEquipamento(a, zm.id, base), /Senha do equipamento/);
+  await assert.rejects(p.salvarEquipamento(a, zm.id, { ...base, endereco: 'rtsp://10.8.0.12', senhaCifrada: 'x' }), /http/);
+  await assert.rejects(p.salvarEquipamento(a, zm.id, { ...base, endereco: 'http://admin:123@10.8.0.12', senhaCifrada: 'x' }), /sem caminho nem senha/);
+  await assert.rejects(p.salvarEquipamento(a, zm.id, { ...base, porta: 9, senhaCifrada: 'x' }), /Porta/);
+  await assert.rejects(p.salvarEquipamento(b, zm.id, { ...base, senhaCifrada: 'x' }), NaoEncontradoError);
+  const eq = await p.salvarEquipamento(a, zm.id, { ...base, senhaCifrada: 'cifrada-1' });
+  assert.deepEqual([eq.endereco, eq.empresaId, eq.condominioId, eq.senhaCifrada, eq.tokenEventos.length >= 20], ['http://10.8.0.12', a, zm.id, 'cifrada-1', true]);
+  const ed = await p.salvarEquipamento(a, zm.id, { ...base, id: eq.id, nome: 'Portão de pedestres' });
+  assert.deepEqual([ed.nome, ed.senhaCifrada, ed.tokenEventos], ['Portão de pedestres', 'cifrada-1', eq.tokenEventos]);
+  assert.equal((await p.equipamentoPorToken(eq.tokenEventos))?.id, eq.id);
+  assert.equal(await p.equipamentoPorToken('nao-existe'), undefined);
+  assert.equal((await p.buscarEquipamento(a, eq.id))?.nome, 'Portão de pedestres');
+  assert.equal(await p.buscarEquipamento(b, eq.id), undefined);
+  assert.deepEqual((await p.equipamentosAtivos()).map((e) => e.id), [eq.id]);
+  await p.registrarAbertura(a, { equipamentoId: eq.id, condominioId: zm.id, em: new Date('2026-10-28T20:00:00Z'), operador: 'Ana', ok: true });
+  await p.registrarAbertura(a, { equipamentoId: eq.id, condominioId: zm.id, em: new Date('2026-10-28T20:05:00Z'), operador: 'Ana', ok: false, erro: 'fora do ar' });
+  assert.deepEqual((await p.listarAberturas(a, zm.id, 10)).map((x) => [x.ok, x.erro]), [[false, 'fora do ar'], [true, undefined]]);
+  assert.deepEqual(await p.listarAberturas(b, zm.id, 10), []);
+  await p.removerEquipamento(a, zm.id, eq.id);
+  assert.equal((await p.listarAberturas(a, zm.id, 10))[0]!.equipamentoId, undefined);
+  const eq2 = await p.salvarEquipamento(a, zm.id, { ...base, senhaCifrada: 'c' });
+
   const susp = await p.atualizarCondominio(a, zm.id, { nome: 'Cond. Zé Moreira', ativo: false });
   assert.equal(susp.ativo, false);
+  // Condomínio desativado não tem equipamento acompanhado.
+  assert.deepEqual(await p.equipamentosAtivos(), []);
+  assert.equal((await p.listarEquipamentos(a, zm.id))[0]!.id, eq2.id);
 }
 
 test('portaria em memória cumpre o contrato', async () => {
@@ -95,7 +122,7 @@ test('portaria no PostgreSQL cumpre o contrato', { skip: !process.env.PG_TEST_UR
   const repo: Repositorio = new PgRepo(process.env.PG_TEST_URL!);
   await repo.init();
   const pool = (repo as unknown as { pool: { query: (q: string) => Promise<unknown> } }).pool;
-  await pool.query('TRUNCATE atendimentos_portaria, unidades, condominios, ocorrencias, eventos, contatos, cameras, contas, clientes, usuarios, rotas, empresas RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE aberturas_porta, equipamentos_portaria, atendimentos_portaria, unidades, condominios, ocorrencias, eventos, contatos, cameras, contas, clientes, usuarios, rotas, empresas RESTART IDENTITY CASCADE');
   try {
     const a = await repo.criarEmpresa({ nome: 'A' });
     const b = await repo.criarEmpresa({ nome: 'B' });

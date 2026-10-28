@@ -55,6 +55,9 @@ Para vender o uso a outras empresas, defina `PLATAFORMA_SENHA` no `.env` antes d
 empresa pelas suas receptoras/linhas, senão os eventos novos dela continuam caindo na sua fila quando não houver
 rota mais específica.
 
+Para a portaria remota (abrir portão e receber chamadas dos leitores Hikvision), siga
+[PORTARIA-VPN.md](PORTARIA-VPN.md).
+
 ## 5. Atualizar
 
 ```bash

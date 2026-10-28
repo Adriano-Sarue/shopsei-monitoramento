@@ -167,3 +167,22 @@ dialog.largo { width: min(860px, calc(100vw - 24px)); }
 .rotulo-secao { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--mute); margin-top: 4px; }
 textarea { resize: vertical; }
 @media (max-width: 700px) { .pessoa-form { grid-template-columns: 1fr 1fr; } .pessoa-form .largo { grid-column: 1 / -1; } }
+
+.portas { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.porta-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); }
+button.armado { background: var(--destaque); border-color: var(--destaque); color: #1a1a1a; }
+.chamada { display: flex; gap: 14px; padding: 12px; margin-bottom: 12px; border: 2px solid var(--destaque); animation: piscar 1.6s ease-out infinite; }
+.foto-chamada { width: 180px; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 8px; background: #000; flex-shrink: 0; }
+.info-chamada { flex: 1; min-width: 0; }
+.info-chamada .rotulo { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--destaque); }
+.info-chamada .cond { font-size: 18px; display: block; }
+.info-chamada .acoes { margin-top: 8px; }
+@media (max-width: 640px) { .chamada { flex-direction: column; } .foto-chamada { width: 100%; } }
+.evento-leitor { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.evento-leitor:last-child { border-bottom: 0; }
+.evento-leitor > div { flex: 1; min-width: 0; }
+.mini-foto { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; cursor: zoom-in; background: var(--bg); }
+.etiqueta.evento-acesso { background: var(--ok); border-color: var(--ok); color: #fff; }
+.etiqueta.evento-negado { background: var(--erro); border-color: var(--erro); color: #fff; }
+.etiqueta.evento-chamada { background: var(--destaque); border-color: var(--destaque); color: #1a1a1a; }
+.evento-leitor .linha { display: flex; justify-content: space-between; align-items: center; gap: 8px; }

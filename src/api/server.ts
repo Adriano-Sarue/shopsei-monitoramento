@@ -7,7 +7,10 @@ import type { Ocorrencia } from '../incidents/queue.js';
 import type { Central } from '../central.js';
 import { conferirSenha, hashSenha, SENHA_MINIMA } from '../auth/senha.js';
 import { Sessoes, type Sessao } from '../auth/sessoes.js';
-import { lerImportacao, pessoaValida, rotuloUnidade, UnidadeDuplicadaError, type NovaUnidade, type NovoAtendimento, type Pessoa } from '../portaria/tipos.js';
+import type { PortariaAoVivo } from '../portaria/aoVivo.js';
+import type { Cofre } from '../portaria/cofre.js';
+import { ErroEquipamento, lerEventoEquipamento } from '../portaria/hikvision.js';
+import { lerImportacao, pessoaValida, rotuloUnidade, UnidadeDuplicadaError, type Equipamento, type NovaUnidade, type NovoAtendimento, type Pessoa } from '../portaria/tipos.js';
 import {
   ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError,
   type Cliente, type NovoCliente, type Papel, type Repositorio, type Rota, type Usuario,
@@ -25,6 +28,11 @@ export interface ApiOptions {
   repo: Repositorio;
   // Quando chegou o último evento das centrais da empresa (inclusive teste e supervisão): mostra no console se o feed calou.
   ultimoEvento?: (empresaId: number) => Date | undefined;
+  // Portaria: chamadas e eventos dos equipamentos, cofre das senhas deles e o endereço (pela VPN) em que os
+  // equipamentos alcançam este servidor para enviar eventos, ex.: http://10.8.0.1:8090.
+  aoVivo?: PortariaAoVivo;
+  cofre?: Cofre;
+  urlEventos?: string;
 }
 
 function clienteResumo(c: Cliente | undefined, completo: boolean) {
@@ -137,9 +145,21 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
 
+async function readRaw(req: IncomingMessage, max: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > max) throw new Error('Corpo grande demais');
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 function send(res: ServerResponse, status: number, body: unknown, type = 'application/json', extra: Record<string, string> = {}): void {
-  res.writeHead(status, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...extra });
-  res.end(typeof body === 'string' ? body : JSON.stringify(body));
+  const binario = Buffer.isBuffer(body);
+  res.writeHead(status, { 'content-type': binario ? type : `${type}; charset=utf-8`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...extra });
+  res.end(binario || typeof body === 'string' ? body : JSON.stringify(body));
 }
 
 class HttpError extends Error {
@@ -275,6 +295,100 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         return send(res, 200, { criadas, atualizadas, pessoas });
       }
     }
+    // ---- Equipamentos (leitor facial / interfone) do condomínio.
+    const publicoEquip = (e: Equipamento) => ({
+      id: e.id, condominioId: e.condominioId, nome: e.nome, marca: e.marca, porta: e.porta, ativo: e.ativo,
+      ...(q.papel === 'admin' ? { endereco: e.endereco, usuario: e.usuario } : {}),
+      ...(opts.aoVivo?.estado(e.id) ?? { online: false }),
+    });
+    const equip = async (id: number) => {
+      const e = Number.isNaN(id) ? undefined : await p.buscarEquipamento(eid, id);
+      if (!e) throw new NaoEncontradoError(`Equipamento ${id} não existe`);
+      return e;
+    };
+    const aoVivo = () => {
+      if (!opts.aoVivo) throw new HttpError(503, 'Integração com equipamentos desligada neste servidor');
+      return opts.aoVivo;
+    };
+    if (partes[0] === 'condominios' && partes[2] === 'equipamentos' && !Number.isNaN(num(partes[1]))) {
+      const cid = num(partes[1]);
+      if (partes.length === 3 && req.method === 'GET') return send(res, 200, (await p.listarEquipamentos(eid, cid)).map(publicoEquip));
+      exigirAdmin(q);
+      const id = partes.length === 4 ? num(partes[3]) : undefined;
+      if (req.method === 'DELETE' && id !== undefined && !Number.isNaN(id)) {
+        await p.removerEquipamento(eid, cid, id);
+        await opts.aoVivo?.recarregar();
+        return send(res, 200, { ok: true });
+      }
+      if ((req.method === 'POST' && partes.length === 3) || (req.method === 'PUT' && id !== undefined && !Number.isNaN(id))) {
+        const b = await readJson(req);
+        let senhaCifrada: string | undefined;
+        if (typeof b.senha === 'string' && b.senha) {
+          if (!opts.cofre) throw new HttpError(503, 'Defina CHAVE_EQUIPAMENTOS no servidor para guardar senhas de equipamentos');
+          if (b.senha.length > 64) throw new Error('Senha do equipamento longa demais');
+          senhaCifrada = opts.cofre.cifrar(b.senha);
+        }
+        const e = await p.salvarEquipamento(eid, cid, {
+          id, nome: String(b.nome ?? ''), marca: 'hikvision', endereco: String(b.endereco ?? ''), usuario: String(b.usuario ?? ''),
+          porta: b.porta === undefined || b.porta === '' ? 1 : Number(b.porta), ativo: b.ativo !== false, senhaCifrada,
+        });
+        await opts.aoVivo?.recarregar();
+        return send(res, id === undefined ? 201 : 200, publicoEquip(e));
+      }
+    }
+    if (partes[0] === 'equipamentos' && partes.length === 3) {
+      const e = await equip(num(partes[1]));
+      const acao = partes[2];
+      if (req.method === 'GET' && acao === 'foto') {
+        const jpg = await aoVivo().conexao(e).foto();
+        return send(res, 200, jpg, 'image/jpeg');
+      }
+      if (req.method === 'POST' && acao === 'abrir') {
+        // Toda tentativa fica registrada, com quem pediu e se o equipamento aceitou.
+        const b = await readJson(req);
+        const operador = q.nome ?? text(b.operador, 'operador');
+        try {
+          await aoVivo().conexao(e).abrirPorta(e.porta);
+        } catch (err) {
+          await p.registrarAbertura(eid, { equipamentoId: e.id, condominioId: e.condominioId, em: new Date(), operador, ok: false, erro: (err as Error).message });
+          throw err;
+        }
+        await p.registrarAbertura(eid, { equipamentoId: e.id, condominioId: e.condominioId, em: new Date(), operador, ok: true });
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && acao === 'encerrar') {
+        await readJson(req);
+        await aoVivo().conexao(e).encerrarChamada();
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && acao === 'testar') {
+        exigirAdmin(q);
+        await readJson(req);
+        return send(res, 200, await aoVivo().conexao(e).info());
+      }
+      if (req.method === 'POST' && acao === 'configurar-envio') {
+        exigirAdmin(q);
+        await readJson(req);
+        if (!opts.urlEventos) throw new HttpError(503, 'Defina PORTARIA_URL_EVENTOS no servidor (endereço deste servidor na VPN)');
+        await aoVivo().conexao(e).configurarEnvio(`${opts.urlEventos.replace(/\/+$/, '')}/hik/${e.tokenEventos}`);
+        return send(res, 200, { ok: true });
+      }
+    }
+    if (partes[0] === 'ao-vivo' && partes.length === 1 && req.method === 'GET') {
+      const cond = Number(url.searchParams.get('condominio')) || undefined;
+      const v = opts.aoVivo;
+      return send(res, 200, { chamadas: v?.chamadas(eid) ?? [], eventos: v?.eventosDa(eid, cond).slice(0, 30) ?? [] });
+    }
+    if (partes[0] === 'eventos' && partes[2] === 'foto' && partes.length === 3 && req.method === 'GET') {
+      const jpg = opts.aoVivo?.fotoDoEvento(eid, partes[1]!);
+      if (!jpg) throw new NaoEncontradoError('Foto não disponível');
+      return send(res, 200, jpg, 'image/jpeg');
+    }
+    if (partes[0] === 'aberturas' && partes.length === 1 && req.method === 'GET') {
+      const cond = Number(url.searchParams.get('condominio'));
+      if (!cond) throw new Error('Informe o condomínio');
+      return send(res, 200, await p.listarAberturas(eid, cond, 30));
+    }
     if (partes.length === 1 && partes[0] === 'atendimentos' && req.method === 'POST') {
       const b = await readJson(req);
       const a: NovoAtendimento = {
@@ -320,6 +434,15 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         return send(res, 200, html, pagina.tipo, pagina.publica ? {} : { 'cache-control': 'no-store' });
       }
       if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: true });
+      // Eventos que os equipamentos dos condomínios enviam (sem login: o token no endereço identifica o equipamento).
+      const hik = /^\/hik\/([A-Za-z0-9_-]{16,64})$/.exec(url.pathname);
+      if (req.method === 'POST' && hik) {
+        const corpo = await readRaw(req, 3 * 1024 * 1024);
+        const e = opts.aoVivo ? await repo.portaria.equipamentoPorToken(hik[1]!) : undefined;
+        if (!e || !opts.aoVivo) return send(res, 404, { erro: 'Não encontrado' });
+        opts.aoVivo.receber(e, lerEventoEquipamento(corpo, req.headers['content-type'] ?? ''));
+        return send(res, 200, { ok: true });
+      }
       if (!url.pathname.startsWith('/api/')) return send(res, 404, { erro: 'Não encontrado' });
 
       // Chamadas que mudam algo só valem como JSON: formulários de outros sites não conseguem enviá-las.
@@ -541,6 +664,7 @@ export function createApi(central: Central, opts: ApiOptions): Server {
       send(res, 404, { erro: 'Não encontrado' });
     } catch (err) {
       if (err instanceof HttpError) return send(res, err.status, { erro: err.message });
+      if (err instanceof ErroEquipamento) return send(res, 502, { erro: err.message });
       if (err instanceof ContaDuplicadaError || err instanceof LoginDuplicadoError || err instanceof RotaDuplicadaError || err instanceof UnidadeDuplicadaError) return send(res, 409, { erro: err.message });
       if (err instanceof NaoEncontradoError) return send(res, 404, { erro: err.message });
       if (err instanceof SyntaxError) return send(res, 400, { erro: 'JSON inválido' });
