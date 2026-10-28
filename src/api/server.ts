@@ -7,6 +7,10 @@ import type { Ocorrencia } from '../incidents/queue.js';
 import type { Central } from '../central.js';
 import { conferirSenha, hashSenha, SENHA_MINIMA } from '../auth/senha.js';
 import { Sessoes, type Sessao } from '../auth/sessoes.js';
+import type { PortariaAoVivo } from '../portaria/aoVivo.js';
+import type { Cofre } from '../portaria/cofre.js';
+import { ErroEquipamento, lerEventoEquipamento } from '../portaria/hikvision.js';
+import { lerImportacao, pessoaValida, rotuloUnidade, UnidadeDuplicadaError, type Equipamento, type NovaUnidade, type NovoAtendimento, type Pessoa } from '../portaria/tipos.js';
 import {
   ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError,
   type Cliente, type NovoCliente, type Papel, type Repositorio, type Rota, type Usuario,
@@ -24,6 +28,11 @@ export interface ApiOptions {
   repo: Repositorio;
   // Quando chegou o último evento das centrais da empresa (inclusive teste e supervisão): mostra no console se o feed calou.
   ultimoEvento?: (empresaId: number) => Date | undefined;
+  // Portaria: chamadas e eventos dos equipamentos, cofre das senhas deles e o endereço (pela VPN) em que os
+  // equipamentos alcançam este servidor para enviar eventos, ex.: http://10.8.0.1:8090.
+  aoVivo?: PortariaAoVivo;
+  cofre?: Cofre;
+  urlEventos?: string;
 }
 
 function clienteResumo(c: Cliente | undefined, completo: boolean) {
@@ -111,6 +120,8 @@ const PAGINAS: Record<string, { arquivo: string; tipo: string; publica?: boolean
   '/index.html': { arquivo: 'index.html', tipo: 'text/html', empresa: true },
   '/clientes.html': { arquivo: 'clientes.html', tipo: 'text/html', empresa: true, admin: true },
   '/historico.html': { arquivo: 'historico.html', tipo: 'text/html', empresa: true },
+  '/portaria.html': { arquivo: 'portaria.html', tipo: 'text/html', empresa: true },
+  '/condominios.html': { arquivo: 'condominios.html', tipo: 'text/html', empresa: true, admin: true },
   '/usuarios.html': { arquivo: 'usuarios.html', tipo: 'text/html', admin: true },
   '/empresas.html': { arquivo: 'empresas.html', tipo: 'text/html', plataforma: true },
   '/login.html': { arquivo: 'login.html', tipo: 'text/html', publica: true },
@@ -134,15 +145,49 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
 
+async function readRaw(req: IncomingMessage, max: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > max) throw new Error('Corpo grande demais');
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 function send(res: ServerResponse, status: number, body: unknown, type = 'application/json', extra: Record<string, string> = {}): void {
-  res.writeHead(status, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...extra });
-  res.end(typeof body === 'string' ? body : JSON.stringify(body));
+  const binario = Buffer.isBuffer(body);
+  res.writeHead(status, { 'content-type': binario ? type : `${type}; charset=utf-8`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...extra });
+  res.end(binario || typeof body === 'string' ? body : JSON.stringify(body));
 }
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
   }
+}
+
+// Planilha para o Excel (ponto e vírgula, BOM para acentos). Célula começando com = + - @ viraria fórmula:
+// um apóstrofo na frente impede.
+function csv<K extends string>(cab: readonly K[], linhas: Partial<Record<K, unknown>>[]): string {
+  const cel = (v: unknown) => {
+    let t = v === null || v === undefined ? '' : String(v);
+    if (/^[=+\-@]/.test(t)) t = `'${t}`;
+    return /[",;\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  return '\ufeff' + [cab.join(';'), ...linhas.map((l) => cab.map((c) => cel(l[c])).join(';'))].join('\r\n') + '\r\n';
+}
+
+// Data e hora de Brasília para planilhas (o Excel não entende o formato ISO).
+const dataHoraBr = (d: Date | undefined | null) => (d ? d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }).replace(',', '') : '');
+
+// Data de filtro: "AAAA-MM-DD" vale o dia inteiro (início em "de", fim em "até").
+function dataFiltro(v: string | null, fim: boolean): Date | undefined {
+  if (!v) return undefined;
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T${fim ? '23:59:59.999' : '00:00:00'}` : v);
+  if (Number.isNaN(d.getTime())) throw new Error('Data inválida');
+  return d;
 }
 
 function text(v: unknown, campo: string): string {
@@ -186,6 +231,193 @@ export function createApi(central: Central, opts: ApiOptions): Server {
     if (empresaId !== null && central.empresa(empresaId) && !sessoes.temSessao(empresaId, nome)) central.fila(empresaId).desconectar(nome);
   };
 
+  // ---- Portaria remota: condomínios e unidades (o administrador cadastra) e atendimentos (o operador registra).
+  const portaria = async (req: IncomingMessage, res: ServerResponse, url: URL, q: Quem, eid: number): Promise<void> => {
+    const p = repo.portaria;
+    const partes = url.pathname.split('/').slice(3); // condominios, :id, unidades | importar, :uid
+    const num = (v: string | undefined) => (v && /^\d+$/.test(v) ? Number(v) : NaN);
+    const opcional = (v: unknown) => (typeof v === 'string' ? v : undefined);
+    if (partes[0] === 'condominios') {
+      const cid = num(partes[1]);
+      if (partes.length === 1 && req.method === 'GET') return send(res, 200, await p.listarCondominios(eid));
+      if (partes.length === 1 && req.method === 'POST') {
+        exigirAdmin(q);
+        const b = await readJson(req);
+        return send(res, 201, await p.criarCondominio(eid, { nome: String(b.nome ?? ''), endereco: opcional(b.endereco), instrucoes: opcional(b.instrucoes) }));
+      }
+      if (partes.length === 2 && !Number.isNaN(cid) && req.method === 'PUT') {
+        exigirAdmin(q);
+        const b = await readJson(req);
+        return send(res, 200, await p.atualizarCondominio(eid, cid, {
+          nome: String(b.nome ?? ''), endereco: opcional(b.endereco), instrucoes: opcional(b.instrucoes), ativo: typeof b.ativo === 'boolean' ? b.ativo : undefined,
+        }));
+      }
+      if (partes[2] === 'unidades' && !Number.isNaN(cid)) {
+        if (partes.length === 3 && req.method === 'GET') {
+          // Quem está com a validade vencida vai marcado: o operador confirma com o morador antes de liberar.
+          const hoje = new Date();
+          const us = await p.listarUnidades(eid, cid);
+          return send(res, 200, us.map((u) => ({ ...u, rotulo: rotuloUnidade(u), pessoas: u.pessoas.map((x) => ({ ...x, vencido: !pessoaValida(x, hoje) })) })));
+        }
+        exigirAdmin(q);
+        const entrada = (b: Record<string, unknown>): NovaUnidade => ({
+          bloco: opcional(b.bloco), numero: String(b.numero ?? ''), observacao: opcional(b.observacao),
+          pessoas: Array.isArray(b.pessoas) ? (b.pessoas as Pessoa[]) : [],
+        });
+        if (partes.length === 3 && req.method === 'POST') return send(res, 201, await p.salvarUnidade(eid, cid, entrada(await readJson(req))));
+        const uid = num(partes[3]);
+        if (partes.length === 4 && !Number.isNaN(uid) && req.method === 'PUT') return send(res, 200, await p.salvarUnidade(eid, cid, { ...entrada(await readJson(req)), id: uid }));
+        if (partes.length === 4 && !Number.isNaN(uid) && req.method === 'DELETE') {
+          await p.removerUnidade(eid, cid, uid);
+          return send(res, 200, { ok: true });
+        }
+      }
+      if (partes[2] === 'importar' && partes.length === 3 && !Number.isNaN(cid) && req.method === 'POST') {
+        // Unidade nova é criada; a que já existe ganha as pessoas que ainda não tem (pelo nome). Ninguém é apagado.
+        exigirAdmin(q);
+        const novas = lerImportacao(String((await readJson(req)).texto ?? ''));
+        const atuais = await p.listarUnidades(eid, cid);
+        let criadas = 0, atualizadas = 0, pessoas = 0;
+        for (const n of novas) {
+          const u = atuais.find((x) => (x.bloco ?? '') === (n.bloco ?? '') && x.numero === n.numero);
+          if (!u) {
+            await p.salvarUnidade(eid, cid, n);
+            criadas++;
+            pessoas += n.pessoas.length;
+            continue;
+          }
+          const faltam = n.pessoas.filter((x) => !u.pessoas.some((y) => y.nome.toLowerCase() === x.nome.toLowerCase()));
+          if (!faltam.length) continue;
+          await p.salvarUnidade(eid, cid, { ...u, pessoas: [...u.pessoas, ...faltam] });
+          atualizadas++;
+          pessoas += faltam.length;
+        }
+        return send(res, 200, { criadas, atualizadas, pessoas });
+      }
+    }
+    // ---- Equipamentos (leitor facial / interfone) do condomínio.
+    const publicoEquip = (e: Equipamento) => ({
+      id: e.id, condominioId: e.condominioId, nome: e.nome, marca: e.marca, porta: e.porta, ativo: e.ativo,
+      ...(q.papel === 'admin' ? { endereco: e.endereco, usuario: e.usuario } : {}),
+      ...(opts.aoVivo?.estado(e.id) ?? { online: false }),
+    });
+    const equip = async (id: number) => {
+      const e = Number.isNaN(id) ? undefined : await p.buscarEquipamento(eid, id);
+      if (!e) throw new NaoEncontradoError(`Equipamento ${id} não existe`);
+      return e;
+    };
+    const aoVivo = () => {
+      if (!opts.aoVivo) throw new HttpError(503, 'Integração com equipamentos desligada neste servidor');
+      return opts.aoVivo;
+    };
+    if (partes[0] === 'condominios' && partes[2] === 'equipamentos' && !Number.isNaN(num(partes[1]))) {
+      const cid = num(partes[1]);
+      if (partes.length === 3 && req.method === 'GET') return send(res, 200, (await p.listarEquipamentos(eid, cid)).map(publicoEquip));
+      exigirAdmin(q);
+      const id = partes.length === 4 ? num(partes[3]) : undefined;
+      if (req.method === 'DELETE' && id !== undefined && !Number.isNaN(id)) {
+        await p.removerEquipamento(eid, cid, id);
+        await opts.aoVivo?.recarregar();
+        return send(res, 200, { ok: true });
+      }
+      if ((req.method === 'POST' && partes.length === 3) || (req.method === 'PUT' && id !== undefined && !Number.isNaN(id))) {
+        const b = await readJson(req);
+        let senhaCifrada: string | undefined;
+        if (typeof b.senha === 'string' && b.senha) {
+          if (!opts.cofre) throw new HttpError(503, 'Defina CHAVE_EQUIPAMENTOS no servidor para guardar senhas de equipamentos');
+          if (b.senha.length > 64) throw new Error('Senha do equipamento longa demais');
+          senhaCifrada = opts.cofre.cifrar(b.senha);
+        }
+        const e = await p.salvarEquipamento(eid, cid, {
+          id, nome: String(b.nome ?? ''), marca: 'hikvision', endereco: String(b.endereco ?? ''), usuario: String(b.usuario ?? ''),
+          porta: b.porta === undefined || b.porta === '' ? 1 : Number(b.porta), ativo: b.ativo !== false, senhaCifrada,
+        });
+        await opts.aoVivo?.recarregar();
+        return send(res, id === undefined ? 201 : 200, publicoEquip(e));
+      }
+    }
+    if (partes[0] === 'equipamentos' && partes.length === 3) {
+      const e = await equip(num(partes[1]));
+      const acao = partes[2];
+      if (req.method === 'GET' && acao === 'foto') {
+        const jpg = await aoVivo().conexao(e).foto();
+        return send(res, 200, jpg, 'image/jpeg');
+      }
+      if (req.method === 'POST' && acao === 'abrir') {
+        // Toda tentativa fica registrada, com quem pediu e se o equipamento aceitou.
+        const b = await readJson(req);
+        const operador = q.nome ?? text(b.operador, 'operador');
+        try {
+          await aoVivo().conexao(e).abrirPorta(e.porta);
+        } catch (err) {
+          await p.registrarAbertura(eid, { equipamentoId: e.id, condominioId: e.condominioId, em: new Date(), operador, ok: false, erro: (err as Error).message });
+          throw err;
+        }
+        await p.registrarAbertura(eid, { equipamentoId: e.id, condominioId: e.condominioId, em: new Date(), operador, ok: true });
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && acao === 'encerrar') {
+        await readJson(req);
+        await aoVivo().conexao(e).encerrarChamada();
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'POST' && acao === 'testar') {
+        exigirAdmin(q);
+        await readJson(req);
+        return send(res, 200, await aoVivo().conexao(e).info());
+      }
+      if (req.method === 'POST' && acao === 'configurar-envio') {
+        exigirAdmin(q);
+        await readJson(req);
+        if (!opts.urlEventos) throw new HttpError(503, 'Defina PORTARIA_URL_EVENTOS no servidor (endereço deste servidor na VPN)');
+        await aoVivo().conexao(e).configurarEnvio(`${opts.urlEventos.replace(/\/+$/, '')}/hik/${e.tokenEventos}`);
+        return send(res, 200, { ok: true });
+      }
+    }
+    if (partes[0] === 'ao-vivo' && partes.length === 1 && req.method === 'GET') {
+      const cond = Number(url.searchParams.get('condominio')) || undefined;
+      const v = opts.aoVivo;
+      return send(res, 200, { chamadas: v?.chamadas(eid) ?? [], eventos: v?.eventosDa(eid, cond).slice(0, 30) ?? [] });
+    }
+    if (partes[0] === 'eventos' && partes[2] === 'foto' && partes.length === 3 && req.method === 'GET') {
+      const jpg = opts.aoVivo?.fotoDoEvento(eid, partes[1]!);
+      if (!jpg) throw new NaoEncontradoError('Foto não disponível');
+      return send(res, 200, jpg, 'image/jpeg');
+    }
+    if (partes[0] === 'aberturas' && partes.length === 1 && req.method === 'GET') {
+      const cond = Number(url.searchParams.get('condominio'));
+      if (!cond) throw new Error('Informe o condomínio');
+      return send(res, 200, await p.listarAberturas(eid, cond, 30));
+    }
+    if (partes.length === 1 && partes[0] === 'atendimentos' && req.method === 'POST') {
+      const b = await readJson(req);
+      const a: NovoAtendimento = {
+        condominioId: Number(b.condominioId),
+        unidadeId: b.unidadeId === undefined || b.unidadeId === null || b.unidadeId === '' ? undefined : Number(b.unidadeId),
+        tipo: b.tipo as NovoAtendimento['tipo'], visitante: String(b.visitante ?? ''), decisao: b.decisao as NovoAtendimento['decisao'],
+        documento: opcional(b.documento), autorizadoPor: opcional(b.autorizadoPor), observacao: opcional(b.observacao),
+      };
+      return send(res, 201, await p.registrarAtendimento(eid, a, q.nome ?? text(b.operador, 'operador'), new Date()));
+    }
+    if (partes.length === 1 && (partes[0] === 'atendimentos' || partes[0] === 'atendimentos.csv') && req.method === 'GET') {
+      const ehCsv = partes[0].endsWith('.csv');
+      const cond = url.searchParams.get('condominio');
+      const lista = await p.listarAtendimentos(eid, {
+        condominioId: cond ? Number(cond) || undefined : undefined,
+        de: dataFiltro(url.searchParams.get('de'), false),
+        ate: dataFiltro(url.searchParams.get('ate'), true),
+        limite: Math.min(Math.max(Number(url.searchParams.get('limite')) || 200, 1), ehCsv ? 5000 : 500),
+      });
+      const nomes = new Map((await p.listarCondominios(eid)).map((c) => [c.id, c.nome]));
+      const linhas = lista.map((a) => ({ ...a, em: a.em.toISOString(), condominio: nomes.get(a.condominioId) ?? '' }));
+      if (!ehCsv) return send(res, 200, linhas);
+      const cab = ['id', 'em', 'condominio', 'unidade', 'tipo', 'visitante', 'documento', 'decisao', 'autorizadoPor', 'operador', 'observacao'] as const;
+      const planilha = lista.map((a, i) => ({ ...linhas[i]!, em: dataHoraBr(a.em) }));
+      return send(res, 200, csv(cab, planilha), 'text/csv', { 'content-disposition': 'attachment; filename="portaria.csv"' });
+    }
+    send(res, 404, { erro: 'Não encontrado' });
+  };
+
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -202,6 +434,15 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         return send(res, 200, html, pagina.tipo, pagina.publica ? {} : { 'cache-control': 'no-store' });
       }
       if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: true });
+      // Eventos que os equipamentos dos condomínios enviam (sem login: o token no endereço identifica o equipamento).
+      const hik = /^\/hik\/([A-Za-z0-9_-]{16,64})$/.exec(url.pathname);
+      if (req.method === 'POST' && hik) {
+        const corpo = await readRaw(req, 3 * 1024 * 1024);
+        const e = opts.aoVivo ? await repo.portaria.equipamentoPorToken(hik[1]!) : undefined;
+        if (!e || !opts.aoVivo) return send(res, 404, { erro: 'Não encontrado' });
+        opts.aoVivo.receber(e, lerEventoEquipamento(corpo, req.headers['content-type'] ?? ''));
+        return send(res, 200, { ok: true });
+      }
       if (!url.pathname.startsWith('/api/')) return send(res, 404, { erro: 'Não encontrado' });
 
       // Chamadas que mudam algo só valem como JSON: formulários de outros sites não conseguem enviá-las.
@@ -337,34 +578,22 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         return send(res, 200, { agora: new Date().toISOString(), iniciadoEm: INICIO.toISOString(), ultimoEventoEm: ultimo?.toISOString() ?? null });
       }
       if (req.method === 'GET' && (url.pathname === '/api/historico' || url.pathname === '/api/historico.csv')) {
-        const data = (v: string | null, fim: boolean): Date | undefined => {
-          if (!v) return undefined;
-          const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T${fim ? '23:59:59.999' : '00:00:00'}` : v);
-          if (Number.isNaN(d.getTime())) throw new Error('Data inválida');
-          return d;
-        };
-        const csv = url.pathname.endsWith('.csv');
+        const ehCsv = url.pathname.endsWith('.csv');
         const lista = await repo.listarEncerradas(eid, {
           conta: url.searchParams.get('conta')?.trim().toUpperCase() || undefined,
-          de: data(url.searchParams.get('de'), false),
-          ate: data(url.searchParams.get('ate'), true),
-          limite: Math.min(Math.max(Number(url.searchParams.get('limite')) || 200, 1), csv ? 5000 : 500),
+          de: dataFiltro(url.searchParams.get('de'), false),
+          ate: dataFiltro(url.searchParams.get('ate'), true),
+          limite: Math.min(Math.max(Number(url.searchParams.get('limite')) || 200, 1), ehCsv ? 5000 : 500),
         });
         const linhas = lista.map((o) => ({
           id: o.id, conta: o.conta, cliente: clientes.porConta(o.conta)?.nome ?? null, prioridade: o.prioridade,
           abertaEm: o.abertaEm.toISOString(), encerradaEm: o.encerradaEm?.toISOString() ?? null, operador: o.operador ?? null,
           motivo: o.motivo ?? null, conclusao: o.conclusao ?? null, resumo: o.eventos[0]?.description ?? '', eventos: o.eventos.length,
         }));
-        if (!csv) return send(res, 200, linhas);
-        // Célula começando com = + - @ vira fórmula no Excel: um apóstrofo na frente impede.
-        const cel = (v: unknown) => {
-          let t = v === null || v === undefined ? '' : String(v);
-          if (/^[=+\-@]/.test(t)) t = `'${t}`;
-          return /[",;\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-        };
+        if (!ehCsv) return send(res, 200, linhas);
         const cab = ['id', 'conta', 'cliente', 'prioridade', 'abertaEm', 'encerradaEm', 'operador', 'motivo', 'conclusao', 'resumo', 'eventos'] as const;
-        const texto = '﻿' + [cab.join(';'), ...linhas.map((l) => cab.map((c) => cel(l[c])).join(';'))].join('\r\n') + '\r\n';
-        return send(res, 200, texto, 'text/csv', { 'content-disposition': 'attachment; filename="historico.csv"' });
+        const planilha = lista.map((o, i) => ({ ...linhas[i]!, abertaEm: dataHoraBr(o.abertaEm), encerradaEm: dataHoraBr(o.encerradaEm) }));
+        return send(res, 200, csv(cab, planilha), 'text/csv', { 'content-disposition': 'attachment; filename="historico.csv"' });
       }
 
       if (req.method === 'GET' && url.pathname === '/api/ocorrencias') {
@@ -431,10 +660,12 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         await clientes.refresh();
         return send(res, req.method === 'POST' ? 201 : 200, cliente);
       }
+      if (url.pathname.startsWith('/api/portaria/')) return await portaria(req, res, url, q, eid);
       send(res, 404, { erro: 'Não encontrado' });
     } catch (err) {
       if (err instanceof HttpError) return send(res, err.status, { erro: err.message });
-      if (err instanceof ContaDuplicadaError || err instanceof LoginDuplicadoError || err instanceof RotaDuplicadaError) return send(res, 409, { erro: err.message });
+      if (err instanceof ErroEquipamento) return send(res, 502, { erro: err.message });
+      if (err instanceof ContaDuplicadaError || err instanceof LoginDuplicadoError || err instanceof RotaDuplicadaError || err instanceof UnidadeDuplicadaError) return send(res, 409, { erro: err.message });
       if (err instanceof NaoEncontradoError) return send(res, 404, { erro: err.message });
       if (err instanceof SyntaxError) return send(res, 400, { erro: 'JSON inválido' });
       send(res, 400, { erro: (err as Error).message });

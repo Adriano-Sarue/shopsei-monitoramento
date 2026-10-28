@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto';
 import { hashSenha } from './auth/senha.js';
 import { Sessoes } from './auth/sessoes.js';
 import { eventoInterno } from './incidents/planos.js';
+import { PortariaAoVivo } from './portaria/aoVivo.js';
+import { Cofre } from './portaria/cofre.js';
 import { Central, type Canal } from './central.js';
 import { AccountRegistry } from './receiver/accounts.js';
 import { Receiver, type RawFrame } from './receiver/server.js';
@@ -107,10 +109,20 @@ if (process.env.PLATAFORMA_SENHA && (await repo.listarUsuarios(null)).length ===
   await repo.criarUsuario({ empresaId: null, login, nome: 'Dono do sistema', papel: 'admin', senhaHash: await hashSenha(process.env.PLATAFORMA_SENHA) });
   console.log(`Dono do sistema criado: login "${login}"`);
 }
+// Portaria: equipamentos dos condomínios (pela VPN). Sem CHAVE_EQUIPAMENTOS, o cadastro e o atendimento
+// funcionam, mas o sistema não guarda senha de equipamento nem fala com eles.
+const cofre = process.env.CHAVE_EQUIPAMENTOS ? new Cofre(process.env.CHAVE_EQUIPAMENTOS) : undefined;
+if (!cofre) console.warn('CHAVE_EQUIPAMENTOS não definida: integração com leitores e interfones desligada');
+const aoVivo = new PortariaAoVivo(repo.portaria, cofre);
+await aoVivo.recarregar();
+aoVivo.iniciar(Number(process.env.PORTARIA_INTERVALO_MS ?? 2000));
+setInterval(() => void aoVivo.recarregar().catch((err) => console.error('Falha ao recarregar equipamentos:', err)), 60_000).unref();
+
 const sessoes = new Sessoes();
 const api = createApi(central, {
   token: process.env.CONSOLE_TOKEN, tokenEmpresa: empresaPrincipal.id, sessoes, publicDir: 'public', port: 0, repo,
   ultimoEvento: (empresaId) => ultimoEvento.get(empresaId),
+  aoVivo, cofre, urlEventos: process.env.PORTARIA_URL_EVENTOS,
 });
 console.log(`Console web ouvindo na porta ${await listen(api, Number(process.env.CONSOLE_PORTA ?? 8090))}`);
 setInterval(() => {
@@ -140,6 +152,7 @@ setInterval(() => {
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    aoVivo.parar();
     Promise.all([receiver.stop(), surgard?.stop(), new Promise<void>((r) => api.close(() => r()))])
       .then(() => gravacao)
       .then(() => repo.fechar())

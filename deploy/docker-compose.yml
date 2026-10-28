@@ -28,6 +28,9 @@ services:
       EMPRESA_NOME: ${EMPRESA_NOME:-Shop Sei}
       PLATAFORMA_LOGIN: ${PLATAFORMA_LOGIN:-plataforma}
       PLATAFORMA_SENHA: ${PLATAFORMA_SENHA:-}
+      # Portaria: os equipamentos mandam eventos pelo domínio (HTTPS) e recebem comandos pela VPN (PORTARIA-VPN.md).
+      CHAVE_EQUIPAMENTOS: ${CHAVE_EQUIPAMENTOS:-}
+      PORTARIA_URL_EVENTOS: https://${DOMINIO}
       SURGARD_TCP_PORTA: ${SURGARD_TCP_PORTA:-}
       CONFIAR_PROXY: "1"
       TZ: America/Sao_Paulo

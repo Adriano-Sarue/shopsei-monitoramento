@@ -78,6 +78,20 @@ os seus usuários**, e uma não vê nada da outra (a mesma conta pode existir em
   cria usuário numa empresa (para recuperar acesso) e suspende/reativa. Suspender derruba quem está dentro e
   impede novo login; os eventos continuam chegando à fila da empresa. O dono do sistema não vê fila nem clientes.
 
+## Portaria remota
+
+- **Condomínios** (administrador): instruções para o operador, unidades por bloco e número, e as pessoas de
+  cada unidade (morador, autorizado, prestador ou **não liberar**, com validade opcional). A lista pode ser
+  colada direto do Excel.
+- **Portaria** (operador): busca por unidade ou nome, telefones clicáveis, registro de cada atendimento
+  (liberado, negado ou sem resposta) e planilha do histórico. Liberar alguém com o nome de uma pessoa
+  marcada "não liberar" pede confirmação.
+- **Equipamentos Hikvision** (leitor facial ou interfone, pela API local ISAPI e uma VPN WireGuard por
+  condomínio): abrir porta pela tela (com registro), aviso de visitante chamando com a foto da câmera e
+  eventos do leitor (rosto reconhecido ou não). Precisa de `CHAVE_EQUIPAMENTOS` e `PORTARIA_URL_EVENTOS`;
+  passo a passo em [deploy/PORTARIA-VPN.md](deploy/PORTARIA-VPN.md). Para testar sem o equipamento existe
+  um leitor simulado (`src/simulator/leitorHik.ts`).
+
 ## Feed Sur-Gard (Active Net 3)
 
 Na Shop Sei os eventos chegam ao Moni pelo Active Net 3, que os repassa por porta
@@ -113,7 +127,7 @@ npm run simular -- --conta 1234 --protocolo NULL                       # supervi
 ```
 
 Variáveis de ambiente: `RECEPTORA_TCP_PORTA`, `RECEPTORA_UDP_PORTA` (padrão 9000),
-`DATABASE_URL`, `ADMIN_LOGIN`, `ADMIN_SENHA`, `EMPRESA_NOME`, `PLATAFORMA_LOGIN`, `PLATAFORMA_SENHA`, `SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
+`DATABASE_URL`, `ADMIN_LOGIN`, `ADMIN_SENHA`, `EMPRESA_NOME`, `PLATAFORMA_LOGIN`, `PLATAFORMA_SENHA`, `CHAVE_EQUIPAMENTOS`, `PORTARIA_URL_EVENTOS`, `SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
 
 Para colocar no ar num servidor (com banco, HTTPS e backup), siga [deploy/LEIAME.md](deploy/LEIAME.md).
 

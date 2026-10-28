@@ -1,4 +1,5 @@
 import type { Ocorrencia } from '../incidents/queue.js';
+import type { RepoPortaria } from '../portaria/tipos.js';
 import type { AlarmEvent } from '../protocols/types.js';
 
 export interface Contato {
@@ -126,6 +127,8 @@ export interface FiltroHistorico {
 // Tudo que é de uma empresa recebe o empresaId: uma empresa nunca lê nem altera dado de outra.
 export interface Repositorio {
   init(): Promise<void>;
+  // Condomínios, unidades e atendimentos da portaria remota.
+  readonly portaria: RepoPortaria;
   listarEmpresas(): Promise<Empresa[]>;
   criarEmpresa(e: { nome: string; rotas?: Rota[] }): Promise<Empresa>;
   atualizarEmpresa(id: number, m: { nome?: string; ativo?: boolean; rotas?: Rota[] }): Promise<Empresa>;
