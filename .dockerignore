@@ -1,0 +1,6 @@
+node_modules
+data
+config/accounts.json
+.git
+deploy/.env
+deploy/backups

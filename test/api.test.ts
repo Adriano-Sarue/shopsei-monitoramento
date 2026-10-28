@@ -98,6 +98,9 @@ test('login por usuário: sessão, perfis, bloqueio e revogação', async () => 
     assert.equal(pagina.status, 302);
     assert.equal(pagina.headers.get('location'), '/login.html');
     assert.equal((await fetch(`${base}/login.html`)).status, 200);
+    assert.deepEqual(await (await fetch(`${base}/healthz`)).json(), { ok: true });
+    // Sem CONFIAR_PROXY o cookie não sai como Secure só porque alguém mandou o cabeçalho.
+    assert.doesNotMatch((await fetch(`${base}/api/login`, { method: 'POST', headers: { ...json, 'x-forwarded-proto': 'https' }, body: JSON.stringify({ login: 'admin', senha: 'senha-admin' }) })).headers.get('set-cookie') ?? '', /Secure/);
     assert.equal((await fetch(`${base}/api/ocorrencias`)).status, 401);
 
     assert.equal((await login('ana', 'errada')).status, 401);

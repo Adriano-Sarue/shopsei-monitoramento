@@ -30,3 +30,19 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Valida o docker-compose de implantação
+        working-directory: deploy
+        run: |
+          cp .env.example .env
+          docker compose config -q
+      - name: Monta a imagem e confere o /healthz
+        run: |
+          docker build -t shopsei-app .
+          docker run -d --name app -e ADMIN_SENHA=teste-ci-123456 -p 8090:8090 shopsei-app
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8090/healthz && exit 0; sleep 1; done
+          docker logs app; exit 1
