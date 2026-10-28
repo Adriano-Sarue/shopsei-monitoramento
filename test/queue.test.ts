@@ -105,3 +105,32 @@ test('lote: agendar várias ocorrências de uma vez', () => {
   assert.equal(r.agendadas.length, 2);
   assert.equal(q.get(a).situacao, 'pendente');
 });
+
+test('operador sem conexão devolve as ocorrências à fila e outro pega', () => {
+  const q = new IncidentQueue();
+  q.setOperator('Ana', true);
+  q.handleEvent(ev('0013', '1130 01 003'));
+  assert.equal(q.list()[0]!.operador, 'Ana');
+  q.setOperator('Beto', true);
+  const devolvidas = q.desconectar('Ana');
+  assert.equal(devolvidas.length, 1);
+  assert.equal(q.estaDisponivel('Ana'), false);
+  // Beto estava livre: pega na hora.
+  assert.equal(q.list()[0]!.operador, 'Beto');
+  assert.match(q.list()[0]!.acoes.at(-1)!.descricao, /Ana ficou sem conexão/);
+});
+
+test('evento repetido não cresce sem limite e ocorrências encerradas saem da memória', () => {
+  let agora = new Date('2026-10-28T12:00:00Z');
+  const q = new IncidentQueue({ now: () => agora });
+  for (let i = 0; i < 500; i++) q.handleEvent(ev('0013', '1301 00 000'));
+  assert.equal(q.list().length, 1);
+  assert.equal(q.list()[0]!.eventos.length, 200);
+  q.setOperator('Ana', true);
+  q.encerrar(q.list()[0]!.id, 'Ana', 'ok');
+  q.podar(3600_000);
+  assert.equal(q.list().length, 1);
+  agora = new Date('2026-10-28T14:00:00Z');
+  q.podar(3600_000);
+  assert.equal(q.list().length, 0);
+});

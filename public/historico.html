@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Histórico · Shop Sei Monitoramento</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main class="pagina">
+  <form id="filtros" class="filtros">
+    <label>Conta <input id="conta" placeholder="0013" size="8"></label>
+    <label>De <input id="de" type="date"></label>
+    <label>Até <input id="ate" type="date"></label>
+    <button class="marca-btn" type="submit">Buscar</button>
+    <a id="csv" href="#"><button type="button">Exportar CSV (Excel)</button></a>
+    <span id="total" class="mute"></span>
+  </form>
+  <div id="msg" class="msg erro"></div>
+  <div class="cartao tabela">
+    <table>
+      <thead><tr><th>Encerrada</th><th>Conta</th><th>Cliente</th><th>Evento</th><th>Operador</th><th>Motivo</th><th>Conclusão</th></tr></thead>
+      <tbody id="linhas"></tbody>
+    </table>
+  </div>
+</main>
+<script src="/app.js"></script>
+<script>
+function consulta() {
+  const p = new URLSearchParams();
+  for (const [id, chave] of [['conta', 'conta'], ['de', 'de'], ['ate', 'ate']]) if ($(id).value.trim()) p.set(chave, $(id).value.trim());
+  return p;
+}
+async function buscar() {
+  try {
+    const p = consulta();
+    $('csv').href = '/api/historico.csv?' + p;
+    const lista = await api('/api/historico?' + p);
+    mensagem('msg', '');
+    $('total').textContent = lista.length + ' ocorrências' + (lista.length >= 200 ? ' (mostrando as 200 mais recentes; o CSV traz até 5000)' : '');
+    $('linhas').replaceChildren(...lista.map((o) => {
+      const tr = el('tr');
+      const quando = new Date(o.encerradaEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+      for (const t of [quando, o.conta, o.cliente || '—', o.resumo + (o.eventos > 1 ? ' (+' + (o.eventos - 1) + ')' : ''), o.operador || '', o.motivo || '', o.conclusao || '']) tr.append(el('td', '', t));
+      return tr;
+    }));
+    if (!lista.length) { const tr = el('tr'); const td = el('td', 'mute', 'Nenhuma ocorrência encerrada para esse filtro'); td.colSpan = 7; tr.append(td); $('linhas').append(tr); }
+  } catch (e) { mensagem('msg', e.message, 'erro'); }
+}
+$('filtros').onsubmit = (ev) => { ev.preventDefault(); buscar(); };
+(async () => { await iniciarTopo('historico'); buscar(); })();
+</script>
+</body>
+</html>

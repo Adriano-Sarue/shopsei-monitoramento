@@ -5,7 +5,7 @@ import { parseContactId } from '../src/protocols/contactId.js';
 import type { AlarmEvent } from '../src/protocols/types.js';
 import { MemoryRepo } from '../src/store/memoryRepo.js';
 import { PgRepo } from '../src/store/pgRepo.js';
-import { ClienteIndex, ContaDuplicadaError, type Repositorio } from '../src/store/repositorio.js';
+import { ClienteIndex, ContaDuplicadaError, LoginDuplicadoError, type Repositorio } from '../src/store/repositorio.js';
 
 function ev(account: string, cid: string): AlarmEvent {
   return {
@@ -19,6 +19,15 @@ async function contrato(repo: Repositorio): Promise<void> {
   await repo.init();
   await repo.init(); // idempotente
 
+  const u = await repo.criarUsuario({ login: ' Maria ', nome: 'Maria', papel: 'operador', senhaHash: 'h1' });
+  assert.equal(u.login, 'maria');
+  await assert.rejects(repo.criarUsuario({ login: 'maria', nome: 'Outra', papel: 'admin', senhaHash: 'h' }), LoginDuplicadoError);
+  await assert.rejects(repo.criarUsuario({ login: 'x', nome: 'X', papel: 'admin', senhaHash: 'h' }), /Login/);
+  assert.equal((await repo.buscarUsuario('MARIA'))?.senhaHash, 'h1');
+  const mud = await repo.atualizarUsuario(u.id, { papel: 'admin', ativo: false, senhaHash: 'h2' });
+  assert.deepEqual([mud.papel, mud.ativo, mud.senhaHash, mud.login], ['admin', false, 'h2', 'maria']);
+  assert.equal((await repo.listarUsuarios()).length, 1);
+
   const criado = await repo.criarCliente({
     nome: 'Farmaformula', endereco: 'Rua A, 10', tipo: 'COMERCIAL', palavraChave: 'abc', contraSenha: 'xyz',
     contas: ['0016', ' 0017 '], contatos: [{ nome: 'Maria', telefone: '1499999', ordem: 1 }, { nome: '', ordem: 2 }],
@@ -31,6 +40,11 @@ async function contrato(repo: Repositorio): Promise<void> {
   await assert.rejects(repo.criarCliente({ nome: '', contas: ['1'], contatos: [] }), /Nome/);
   await assert.rejects(repo.criarCliente({ nome: 'X', contas: [], contatos: [] }), /conta/);
   await assert.rejects(repo.criarCliente({ nome: 'X', contas: ['zz!'], contatos: [] }), /inválida/);
+
+  await assert.rejects(repo.criarCliente({ nome: 'Cam', contas: ['0020'], contatos: [], cameras: [{ nome: 'A', url: 'rtsp://x', ordem: 1 }] }), /http/);
+  const cam = await repo.criarCliente({ nome: 'Cam', contas: ['0020'], contatos: [], cameras: [{ nome: 'Entrada', marca: 'Hikvision', url: 'https://c.exemplo/1', ordem: 1 }] });
+  assert.deepEqual(cam.cameras, [{ nome: 'Entrada', marca: 'Hikvision', url: 'https://c.exemplo/1', ordem: 1 }]);
+  assert.deepEqual((await repo.atualizarCliente(cam.id, { nome: 'Cam', contas: ['0020'], contatos: [] })).cameras, []);
 
   const atual = await repo.atualizarCliente(criado.id, { nome: 'Farmaformula Centro', contas: ['0016'], contatos: [{ nome: 'João', telefone: '1488888', ordem: 1 }] });
   assert.equal(atual.nome, 'Farmaformula Centro');
@@ -79,7 +93,7 @@ test('repositório PostgreSQL cumpre o contrato', { skip: !process.env.PG_TEST_U
   await repo.init();
   // Limpa as tabelas para o teste ser repetível.
   const pool = (repo as unknown as { pool: { query: (q: string) => Promise<unknown> } }).pool;
-  await pool.query('TRUNCATE ocorrencias, eventos, contatos, contas, clientes RESTART IDENTITY CASCADE');
+  await pool.query('TRUNCATE ocorrencias, eventos, contatos, cameras, contas, clientes, usuarios RESTART IDENTITY CASCADE');
   try {
     await contrato(repo);
   } finally {

@@ -1,4 +1,7 @@
 import { createApi, listen } from './api/server.js';
+import { randomBytes } from 'node:crypto';
+import { hashSenha } from './auth/senha.js';
+import { Sessoes } from './auth/sessoes.js';
 import { IncidentQueue } from './incidents/queue.js';
 import { AccountRegistry } from './receiver/accounts.js';
 import { Receiver, type RawFrame } from './receiver/server.js';
@@ -40,7 +43,10 @@ receiver.on('raw', (raw: RawFrame) => {
   if (!raw.ok) console.warn(`[NAK] ${raw.remote}: ${raw.error}`);
 });
 
+let ultimoEvento: Date | undefined;
+
 function onEvent(event: AlarmEvent): void {
+  ultimoEvento = new Date();
   store.appendEvent(event).catch((err) => console.error('Falha ao gravar evento:', err));
   gravar(() => repo.salvarEvento(event));
   queue.handleEvent(event);
@@ -67,19 +73,32 @@ if (process.env.SURGARD_TCP_PORTA) {
   console.log(`Feed Sur-Gard ouvindo TCP ${await surgard.start()}`);
 }
 
-// Console web do operador. Desligado se CONSOLE_TOKEN não for definido.
-let api: ReturnType<typeof createApi> | undefined;
-if (process.env.CONSOLE_TOKEN) {
-  api = createApi(queue, { token: process.env.CONSOLE_TOKEN, publicDir: 'public', port: 0, repo, clientes });
-  console.log(`Console web ouvindo na porta ${await listen(api, Number(process.env.CONSOLE_PORTA ?? 8090))}`);
-} else {
-  console.log('Console web desligado (defina CONSOLE_TOKEN para ligar)');
+// Console web: pessoas entram com usuário e senha. Na primeira subida cria o administrador inicial.
+if ((await repo.listarUsuarios()).length === 0) {
+  const login = (process.env.ADMIN_LOGIN ?? 'admin').toLowerCase();
+  const senha = process.env.ADMIN_SENHA ?? randomBytes(9).toString('base64url');
+  await repo.criarUsuario({ login, nome: 'Administrador', papel: 'admin', senhaHash: await hashSenha(senha) });
+  console.log(`Administrador criado: login "${login}"${process.env.ADMIN_SENHA ? '' : `, senha "${senha}" (anote e troque em Usuários)`}`);
 }
+const sessoes = new Sessoes();
+const api = createApi(queue, { token: process.env.CONSOLE_TOKEN, sessoes, publicDir: 'public', port: 0, repo, clientes, ultimoEvento: () => ultimoEvento });
+console.log(`Console web ouvindo na porta ${await listen(api, Number(process.env.CONSOLE_PORTA ?? 8090))}`);
 setInterval(() => queue.reativarVencidas(), 30_000).unref();
+// O console consulta a fila a cada 2 s. Operador sem sinal há 90 s sai da escala e devolve o que estava com ele.
+setInterval(() => {
+  for (const nome of sessoes.ociosos(90_000)) {
+    if (queue.estaDisponivel(nome) || queue.list().some((o) => o.operador === nome && o.situacao === 'em_atendimento')) {
+      console.warn(`Operador ${nome} sem sinal: ocorrências devolvidas à fila`);
+      queue.desconectar(nome);
+    }
+  }
+  sessoes.limpar();
+  queue.podar(60 * 60_000);
+}, 15_000).unref();
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    Promise.all([receiver.stop(), surgard?.stop(), api ? new Promise<void>((r) => api!.close(() => r())) : undefined])
+    Promise.all([receiver.stop(), surgard?.stop(), new Promise<void>((r) => api.close(() => r()))])
       .then(() => gravacao)
       .then(() => repo.fechar())
       .finally(() => process.exit(0));

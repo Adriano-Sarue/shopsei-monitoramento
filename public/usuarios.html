@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Usuários · Shop Sei Monitoramento</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main class="pagina cadastro">
+  <section><h1 style="font-size:20px;margin-bottom:12px">Usuários</h1><div id="lista"></div></section>
+  <form id="form" class="cartao painel">
+    <h2 id="titulo">Novo usuário</h2>
+    <label>Nome <input id="nome" required></label>
+    <label>Login <input id="login" required autocapitalize="none" autocomplete="off" placeholder="ex.: maria"></label>
+    <label>Perfil <select id="papel"><option value="operador">Operador (atende a fila)</option><option value="admin">Administrador (também cadastra)</option></select></label>
+    <label><span id="rot-senha">Senha (mínimo 8 caracteres)</span> <input id="senha" type="password" autocomplete="new-password"></label>
+    <div id="msg" class="msg" role="status"></div>
+    <div style="display:flex;gap:8px"><button class="marca-btn" type="submit">Salvar</button><button type="button" id="limpar">Novo</button></div>
+  </form>
+</main>
+<script src="/app.js"></script>
+<script>
+let editando = null, eu;
+
+function limpar() {
+  editando = null; $('titulo').textContent = 'Novo usuário';
+  for (const id of ['nome', 'login', 'senha']) $(id).value = '';
+  $('login').disabled = false; $('papel').value = 'operador'; $('senha').required = true; $('rot-senha').textContent = 'Senha (mínimo 8 caracteres)';
+}
+function editar(u) {
+  editando = u.id; $('titulo').textContent = 'Editar ' + u.login;
+  $('nome').value = u.nome; $('login').value = u.login; $('login').disabled = true; $('papel').value = u.papel;
+  $('senha').value = ''; $('senha').required = false; $('rot-senha').textContent = 'Nova senha (deixe em branco para manter)';
+}
+async function carregar() {
+  try {
+    const us = await api('/api/usuarios');
+    $('lista').replaceChildren(...us.map((u) => {
+      const d = el('div', 'cartao item' + (u.ativo ? '' : ' inativo'));
+      const t = el('div'); t.append(el('strong', '', u.nome), el('div', 'mute', u.login + ' · ' + (u.papel === 'admin' ? 'Administrador' : 'Operador') + (u.ativo ? '' : ' · desativado')));
+      const b = el('div'); b.style.display = 'flex'; b.style.gap = '6px';
+      const e = el('button', '', 'Editar'); e.onclick = () => editar(u);
+      b.append(e);
+      if (u.login !== eu.login) {
+        const a = el('button', u.ativo ? 'perigo' : '', u.ativo ? 'Desativar' : 'Reativar');
+        a.onclick = async () => { try { await api('/api/usuarios/' + u.id, { method: 'PUT', body: JSON.stringify({ ativo: !u.ativo }) }); carregar(); } catch (err) { mensagem('msg', err.message, 'erro'); } };
+        b.append(a);
+      }
+      d.append(t, b); return d;
+    }));
+  } catch (e) { mensagem('msg', e.message, 'erro'); }
+}
+$('form').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const corpo = { nome: $('nome').value, papel: $('papel').value };
+  if ($('senha').value) corpo.senha = $('senha').value;
+  try {
+    if (editando) await api('/api/usuarios/' + editando, { method: 'PUT', body: JSON.stringify(corpo) });
+    else await api('/api/usuarios', { method: 'POST', body: JSON.stringify({ ...corpo, login: $('login').value }) });
+    toast('Usuário salvo'); mensagem('msg', ''); limpar(); carregar();
+  } catch (e) { mensagem('msg', e.message, 'erro'); }
+};
+$('limpar').onclick = limpar;
+(async () => { eu = await iniciarTopo('usuarios'); limpar(); carregar(); })();
+</script>
+</body>
+</html>

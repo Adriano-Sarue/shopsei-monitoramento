@@ -60,3 +60,25 @@ CREATE TABLE IF NOT EXISTS ocorrencias (
 );
 CREATE INDEX IF NOT EXISTS ocorrencias_situacao_idx ON ocorrencias (situacao, prioridade, aberta_em);
 CREATE INDEX IF NOT EXISTS ocorrencias_conta_idx ON ocorrencias (conta, aberta_em DESC);
+
+-- Quem entra no sistema. A senha é guardada só como hash (scrypt).
+CREATE TABLE IF NOT EXISTS usuarios (
+  id          BIGSERIAL PRIMARY KEY,
+  login       TEXT NOT NULL UNIQUE,
+  nome        TEXT NOT NULL,
+  papel       TEXT NOT NULL CHECK (papel IN ('operador', 'admin')),
+  senha_hash  TEXT NOT NULL,
+  ativo       BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Câmeras do cliente (links que o operador abre ao atender um disparo).
+CREATE TABLE IF NOT EXISTS cameras (
+  id          BIGSERIAL PRIMARY KEY,
+  cliente_id  BIGINT NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  nome        TEXT NOT NULL,
+  marca       TEXT,
+  url         TEXT NOT NULL,
+  ordem       INT NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS cameras_cliente_idx ON cameras (cliente_id, ordem);

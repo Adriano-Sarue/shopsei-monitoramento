@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import type { Ocorrencia, Situacao } from '../incidents/queue.js';
 import type { AlarmEvent } from '../protocols/types.js';
-import { ContaDuplicadaError, validarCliente, type Cliente, type NovoCliente, type Repositorio } from './repositorio.js';
+import { ContaDuplicadaError, LoginDuplicadoError, validarCliente, validarUsuario, type Cliente, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Usuario } from './repositorio.js';
 
 const SCHEMA = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'db', 'schema.sql');
 
@@ -57,9 +57,8 @@ export class PgRepo implements Repositorio {
     );
   }
 
-  async carregarOcorrenciasAbertas(): Promise<Ocorrencia[]> {
-    const { rows } = await this.pool.query<OcorrenciaRow>("SELECT * FROM ocorrencias WHERE situacao <> 'encerrada' ORDER BY id");
-    return rows.map((r) => ({
+  private ocorrencia(r: OcorrenciaRow): Ocorrencia {
+    return {
       id: Number(r.id),
       conta: r.conta,
       contaCadastrada: r.conta_cadastrada,
@@ -74,7 +73,22 @@ export class PgRepo implements Repositorio {
       conclusao: r.conclusao ?? undefined,
       eventos: r.eventos,
       acoes: r.acoes.map((a) => ({ em: new Date(a.em), operador: a.operador ?? undefined, descricao: a.descricao })),
-    }));
+    };
+  }
+
+  async carregarOcorrenciasAbertas(): Promise<Ocorrencia[]> {
+    const { rows } = await this.pool.query<OcorrenciaRow>("SELECT * FROM ocorrencias WHERE situacao <> 'encerrada' ORDER BY id");
+    return rows.map((r) => this.ocorrencia(r));
+  }
+
+  async listarEncerradas(f: FiltroHistorico): Promise<Ocorrencia[]> {
+    const { rows } = await this.pool.query<OcorrenciaRow>(
+      `SELECT * FROM ocorrencias WHERE situacao = 'encerrada'
+         AND ($1::text IS NULL OR conta = $1) AND ($2::timestamptz IS NULL OR encerrada_em >= $2) AND ($3::timestamptz IS NULL OR encerrada_em <= $3)
+       ORDER BY encerrada_em DESC LIMIT $4`,
+      [f.conta ?? null, f.de ?? null, f.ate ?? null, f.limite],
+    );
+    return rows.map((r) => this.ocorrencia(r));
   }
 
   async listarClientes(): Promise<Cliente[]> {
@@ -82,7 +96,9 @@ export class PgRepo implements Repositorio {
       SELECT c.*,
         COALESCE((SELECT json_agg(numero ORDER BY numero) FROM contas WHERE cliente_id = c.id), '[]') AS contas,
         COALESCE((SELECT json_agg(json_build_object('nome', nome, 'telefone', telefone, 'ordem', ordem) ORDER BY ordem, id)
-                  FROM contatos WHERE cliente_id = c.id), '[]') AS contatos
+                  FROM contatos WHERE cliente_id = c.id), '[]') AS contatos,
+        COALESCE((SELECT json_agg(json_build_object('nome', nome, 'marca', marca, 'url', url, 'ordem', ordem) ORDER BY ordem, id)
+                  FROM cameras WHERE cliente_id = c.id), '[]') AS cameras
       FROM clientes c ORDER BY c.nome`);
     return rows.map((r) => ({
       id: Number(r.id),
@@ -96,6 +112,9 @@ export class PgRepo implements Repositorio {
       contas: r.contas as string[],
       contatos: (r.contatos as { nome: string; telefone: string | null; ordem: number }[]).map((x) => ({
         nome: x.nome, telefone: x.telefone ?? undefined, ordem: x.ordem,
+      })),
+      cameras: (r.cameras as { nome: string; marca: string | null; url: string; ordem: number }[]).map((x) => ({
+        nome: x.nome, marca: x.marca ?? undefined, url: x.url, ordem: x.ordem,
       })),
     }));
   }
@@ -113,6 +132,9 @@ export class PgRepo implements Repositorio {
     }
     for (const ct of c.contatos) {
       await db.query('INSERT INTO contatos (cliente_id, nome, telefone, ordem) VALUES ($1, $2, $3, $4)', [id, ct.nome, ct.telefone ?? null, ct.ordem]);
+    }
+    for (const cam of c.cameras ?? []) {
+      await db.query('INSERT INTO cameras (cliente_id, nome, marca, url, ordem) VALUES ($1, $2, $3, $4, $5)', [id, cam.nome, cam.marca ?? null, cam.url, cam.ordem]);
     }
   }
 
@@ -155,9 +177,44 @@ export class PgRepo implements Repositorio {
       if (r.rowCount === 0) throw new Error(`Cliente ${id} não existe`);
       await db.query('DELETE FROM contas WHERE cliente_id = $1', [id]);
       await db.query('DELETE FROM contatos WHERE cliente_id = $1', [id]);
+      await db.query('DELETE FROM cameras WHERE cliente_id = $1', [id]);
       await this.gravarContasEContatos(db, id, c);
     });
     return (await this.listarClientes()).find((x) => x.id === id)!;
+  }
+
+  private usuario(r: Record<string, unknown>): Usuario {
+    return { id: Number(r.id), login: r.login as string, nome: r.nome as string, papel: r.papel as Usuario['papel'], ativo: r.ativo as boolean, senhaHash: r.senha_hash as string };
+  }
+
+  async listarUsuarios(): Promise<Usuario[]> {
+    const { rows } = await this.pool.query('SELECT * FROM usuarios ORDER BY nome');
+    return rows.map((r) => this.usuario(r));
+  }
+
+  async buscarUsuario(login: string): Promise<Usuario | undefined> {
+    const { rows } = await this.pool.query('SELECT * FROM usuarios WHERE login = $1', [login.trim().toLowerCase()]);
+    return rows[0] ? this.usuario(rows[0]) : undefined;
+  }
+
+  async criarUsuario(entrada: NovoUsuario): Promise<Usuario> {
+    const v = validarUsuario(entrada);
+    try {
+      const { rows } = await this.pool.query('INSERT INTO usuarios (login, nome, papel, senha_hash) VALUES ($1,$2,$3,$4) RETURNING *', [v.login, v.nome, v.papel, entrada.senhaHash]);
+      return this.usuario(rows[0]);
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') throw new LoginDuplicadoError(`O login ${v.login} já existe`);
+      throw err;
+    }
+  }
+
+  async atualizarUsuario(id: number, m: Partial<Pick<Usuario, 'nome' | 'papel' | 'ativo' | 'senhaHash'>>): Promise<Usuario> {
+    const { rows: atual } = await this.pool.query('SELECT * FROM usuarios WHERE id = $1', [id]);
+    if (!atual[0]) throw new Error(`Usuário ${id} não existe`);
+    const u = this.usuario(atual[0]);
+    const v = validarUsuario({ login: u.login, nome: m.nome ?? u.nome, papel: m.papel ?? u.papel });
+    const { rows } = await this.pool.query('UPDATE usuarios SET nome=$2, papel=$3, ativo=$4, senha_hash=$5 WHERE id=$1 RETURNING *', [id, v.nome, v.papel, m.ativo ?? u.ativo, m.senhaHash ?? u.senhaHash]);
+    return this.usuario(rows[0]);
   }
 
   async fechar(): Promise<void> {

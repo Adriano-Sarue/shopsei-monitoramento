@@ -35,6 +35,8 @@ function exigeAtendimento(e: AlarmEvent): boolean {
   return e.category === 'alarm' || e.category === 'fault' || e.category === 'other';
 }
 
+const MAX_EVENTOS = 200;
+
 // Fila em memória; a versão com PostgreSQL segue o mesmo contrato (db/schema.sql).
 export class IncidentQueue {
   private readonly incidents: Ocorrencia[] = [];
@@ -68,6 +70,36 @@ export class IncidentQueue {
     return disponivel ? this.distribute() : [];
   }
 
+  // O operador saiu (logout, sessão caída ou sem sinal do navegador): fica indisponível e o que
+  // estava com ele volta para a fila, para outro operador pegar.
+  desconectar(nome: string): Ocorrencia[] {
+    this.operators.set(nome, { disponivel: false });
+    const devolvidas: Ocorrencia[] = [];
+    for (const i of this.incidents) {
+      if (i.situacao !== 'em_atendimento' || i.operador !== nome) continue;
+      i.situacao = 'aguardando';
+      i.operador = undefined;
+      i.acoes.push({ em: this.now(), descricao: `Devolvida à fila: ${nome} ficou sem conexão` });
+      this.changed(i);
+      devolvidas.push(i);
+    }
+    this.distribute();
+    return devolvidas;
+  }
+
+  // Tira da memória as ocorrências encerradas há mais de maxIdadeMs (continuam no banco).
+  podar(maxIdadeMs: number): void {
+    const corte = this.now().getTime() - maxIdadeMs;
+    for (let n = this.incidents.length - 1; n >= 0; n--) {
+      const i = this.incidents[n]!;
+      if (i.situacao === 'encerrada' && (i.encerradaEm?.getTime() ?? 0) < corte) this.incidents.splice(n, 1);
+    }
+  }
+
+  estaDisponivel(nome: string): boolean {
+    return this.operators.get(nome)?.disponivel ?? false;
+  }
+
   // Recebe um evento. Devolve a ocorrência afetada, se houver.
   handleEvent(e: AlarmEvent): Ocorrencia | undefined {
     if (e.qualifier === 'restore') return this.noteRestore(e);
@@ -76,7 +108,7 @@ export class IncidentQueue {
     // Eventos repetidos da mesma conta entram na ocorrência aberta em vez de criar outra.
     const open = this.incidents.find((i) => i.conta === e.account && i.situacao !== 'encerrada');
     if (open) {
-      open.eventos.push(e);
+      this.anexar(open, e);
       open.prioridade = Math.min(open.prioridade, e.priority);
       this.changed(open);
       return open;
@@ -97,10 +129,16 @@ export class IncidentQueue {
     return incident;
   }
 
+  // Uma central em falha pode repetir o mesmo evento sem parar: guarda o primeiro e os 199 mais recentes.
+  private anexar(o: Ocorrencia, e: AlarmEvent): void {
+    o.eventos.push(e);
+    if (o.eventos.length > MAX_EVENTOS) o.eventos.splice(1, 1);
+  }
+
   private noteRestore(e: AlarmEvent): Ocorrencia | undefined {
     const open = this.incidents.find((i) => i.conta === e.account && i.situacao !== 'encerrada');
     if (!open) return undefined;
-    open.eventos.push(e);
+    this.anexar(open, e);
     open.acoes.push({ em: this.now(), descricao: `Restauração recebida: ${e.description}` });
     this.changed(open);
     return open;

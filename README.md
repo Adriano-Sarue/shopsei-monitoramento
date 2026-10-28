@@ -30,19 +30,34 @@ palavra-chave, contra-senha e até 3 providências). A palavra-chave e a contra-
 aparecem para o operador que está atendendo a ocorrência. Uma conta só pode pertencer a um cliente.
 
 ```bash
-DATABASE_URL=postgres://usuario:senha@localhost:5432/shopsei CONSOLE_TOKEN=segredo npm start
+DATABASE_URL=postgres://usuario:senha@localhost:5432/shopsei ADMIN_SENHA=troque-esta-senha npm start
 ```
 
 Testes com PostgreSQL: `PG_TEST_URL=postgres://... npm test` (sem a variável, esses testes são pulados).
 
-## Console web do operador
+## Console web e login
 
-Definindo `CONSOLE_TOKEN` (e opcionalmente `CONSOLE_PORTA`, padrão 8090), sobe uma
-página em `http://servidor:8090/` com as colunas Aguardando, Pendente e Em atendimento.
-O operador informa o token e o nome, fica disponível, e a receptora distribui as
-ocorrências (mais urgente primeiro). Ele conclui (com motivo e texto) ou adia 30 minutos.
-O token é compartilhado e o console ainda não tem login por usuário: **ponha atrás de
-HTTPS/VPN antes de expor na internet**. Eventos brutos continuam também em `data/`.
+Defina `CONSOLE_PORTA` (padrão 8090) e abra `http://servidor:8090/`. Cada pessoa entra com **usuário e senha**
+(senha guardada só como hash scrypt; sessão em cookie `HttpOnly`/`SameSite=Strict`, 12 h; 5 senhas erradas
+bloqueiam o login por 5 minutos). Há dois perfis: **operador** (atende a fila) e **administrador** (também
+cadastra clientes e usuários em *Clientes* e *Usuários*).
+
+Na primeira subida o sistema cria o administrador `admin` (ou `ADMIN_LOGIN`) com a senha de `ADMIN_SENHA`;
+se ela não for definida, uma senha aleatória aparece uma vez no log. Troque-a em *Usuários*.
+`CONSOLE_TOKEN` é opcional e serve só para scripts (acesso de administrador por `Authorization: Bearer`).
+
+A fila mostra Aguardando, Pendente e Em atendimento; o operador clica em *Ficar disponível* e a receptora
+distribui as ocorrências (mais urgente primeiro). Ele conclui (motivo e texto) ou adia 15/30/60 min. As cores
+da Shop Sei ficam em `public/app.css` (variáveis no topo). **Ponha atrás de HTTPS** antes de expor na internet
+(com HTTPS o cookie sai como `Secure` quando o proxy envia `X-Forwarded-Proto: https`, ou defina `COOKIE_SEGURO=1`).
+
+## O que mais o console faz
+
+- **Feed parado:** o selo "Último evento" fica vermelho se nenhuma central mandar nada (nem teste/keep alive) por 10 minutos.
+- **Operador que sumiu:** se o navegador do operador fica 90 s sem consultar (fechou, caiu a internet), ele sai da escala e as ocorrências dele voltam para a fila. O mesmo vale no Sair.
+- **Câmeras:** cada cliente pode ter até 3 links de câmera (visualizador web ou nuvem da marca); aparecem como botões só para quem está atendendo.
+- **Histórico:** ocorrências encerradas com filtro por conta e data, e exportação CSV (abre no Excel).
+- **Trocar senha:** cada usuário troca a própria em *Senha*.
 
 ## Feed Sur-Gard (Active Net 3)
 
@@ -56,7 +71,7 @@ validarmos com uma captura real do feed.
 
 - Validar o decodificador Sur-Gard com uma mensagem bruta atual (o `Monitor.Txt` do Moni
   só vai até 12/2024) e a ponte que leva o feed serial do PC da empresa até o servidor.
-- Login por usuário e HTTPS (hoje há um token compartilhado).
+- HTTPS (certificado/proxy) e logo oficial da Shop Sei.
 - Relatórios, envio de e-mail ao cliente e importação dos clientes existentes.
 
 ## Como rodar
@@ -79,7 +94,7 @@ npm run simular -- --conta 1234 --protocolo NULL                       # supervi
 ```
 
 Variáveis de ambiente: `RECEPTORA_TCP_PORTA`, `RECEPTORA_UDP_PORTA` (padrão 9000),
-`DATABASE_URL`, `SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
+`DATABASE_URL`, `ADMIN_LOGIN`, `ADMIN_SENHA`, `SURGARD_TCP_PORTA` (opcional), `CONTAS_ARQUIVO` (padrão `config/accounts.json`), `DADOS_DIR` (padrão `data`).
 
 Com Docker:
 

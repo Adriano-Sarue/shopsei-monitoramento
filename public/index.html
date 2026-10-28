@@ -3,105 +3,158 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Shop Sei Monitoramento</title>
-<style>
-  :root { --bg:#f4f5f7; --card:#fff; --ink:#1c2430; --mute:#6b7685; --line:#d9dde3; --p1:#c0392b; --p2:#e67e22; --p3:#d4ac0d; --p4:#2e86c1; --ok:#1e8449; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#14181d; --card:#1e242b; --ink:#e8ecf1; --mute:#9aa5b1; --line:#323a44; } }
-  * { box-sizing: border-box; }
-  body { margin:0; font:15px system-ui, sans-serif; background:var(--bg); color:var(--ink); }
-  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); }
-  header h1 { font-size:17px; margin:0 auto 0 0; }
-  input, button, textarea { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); }
-  button { cursor:pointer; } button.main { background:var(--ok); color:#fff; border-color:var(--ok); }
-  main { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; padding:12px 16px; }
-  @media (max-width:800px) { main { grid-template-columns:1fr; } }
-  section h2 { font-size:14px; margin:0 0 8px; color:var(--mute); text-transform:uppercase; letter-spacing:.04em; }
-  .card { background:var(--card); border:1px solid var(--line); border-left:6px solid var(--p4); border-radius:8px; padding:10px 12px; margin-bottom:8px; }
-  .card.p1 { border-left-color:var(--p1); } .card.p2 { border-left-color:var(--p2); } .card.p3 { border-left-color:var(--p3); }
-  .card .top { display:flex; justify-content:space-between; gap:8px; font-weight:600; }
-  .mute { color:var(--mute); font-size:13px; }
-  .chave { font-weight:600; font-size:13px; margin-top:4px; }
-  a { color:inherit; }
-  .warn { color:var(--p1); font-weight:600; font-size:13px; }
-  .acoes { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
-  #erro { color:var(--p1); padding:0 16px; min-height:20px; }
-</style>
+<title>Fila · Shop Sei Monitoramento</title>
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<header>
-  <h1>Shop Sei Monitoramento</h1>
-  <a href="/clientes.html">Clientes</a>
-  <label>Token <input id="token" type="password" size="12"></label>
-  <label>Operador <input id="operador" size="10"></label>
-  <button id="disp" class="main">Ficar disponível</button>
-</header>
-<div id="erro"></div>
-<main>
-  <section><h2>Aguardando atendimento</h2><div id="aguardando"></div></section>
-  <section><h2>Pendente (adiado)</h2><div id="pendente"></div></section>
-  <section><h2>Em atendimento</h2><div id="em_atendimento"></div></section>
+<div class="resumo">
+  <div class="cartao numero"><b id="n-aguardando">0</b><span class="mute">Aguardando</span></div>
+  <div class="cartao numero"><b id="n-pendente">0</b><span class="mute">Pendentes</span></div>
+  <div class="cartao numero"><b id="n-em_atendimento">0</b><span class="mute">Em atendimento</span></div>
+  <div class="espaco"></div>
+  <span id="feed" class="feed" title="Quando chegou o último evento de qualquer central. Se ficar vermelho, o feed pode ter parado.">Aguardando eventos…</span>
+  <label class="mute" style="margin:0;display:flex;gap:6px;align-items:center"><input id="som" type="checkbox" style="width:auto"> Som de aviso</label>
+  <div class="disp"><span class="bolinha" id="bolinha"></span><span id="estado" class="mute">Indisponível</span><button id="disp" class="principal">Ficar disponível</button></div>
+</div>
+<div id="erro" class="msg erro" style="padding:6px 20px 0"></div>
+<main class="colunas">
+  <section class="coluna"><h2>Aguardando atendimento</h2><div id="aguardando"></div></section>
+  <section class="coluna"><h2>Pendente (adiado)</h2><div id="pendente"></div></section>
+  <section class="coluna"><h2>Em atendimento</h2><div id="em_atendimento"></div></section>
 </main>
+
+<dialog id="dlg-concluir">
+  <form method="dialog" id="form-concluir">
+    <h3>Concluir ocorrência</h3>
+    <p class="mute" id="dlg-resumo" style="margin:0 0 14px"></p>
+    <label>Motivo <input id="motivo" list="motivos" required placeholder="Ex.: Acionamento indevido">
+      <datalist id="motivos"><option value="Acionamento indevido"><option value="Alarme falso"><option value="Falha de energia do cliente"><option value="Falha de comunicação"><option value="Contato com o cliente realizado"><option value="Providências acionadas"></datalist>
+    </label>
+    <label>Texto da conclusão (opcional) <textarea id="conclusao" rows="3"></textarea></label>
+    <div id="dlg-erro" class="msg erro"></div>
+    <div class="botoes"><button type="button" id="cancelar">Cancelar</button><button class="principal" type="submit">Concluir</button></div>
+  </form>
+</dialog>
+
+<script src="/app.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
-const store = { get: (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
-$('token').value = store.get('token'); $('operador').value = store.get('operador');
-let disponivel = false;
+const store = { get: (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* sem armazenamento */ } } };
+const NIVEIS = { 1: 'Crítico', 2: 'Alto', 3: 'Médio', 4: 'Baixo' };
+let eu, disponivel = false, conhecidas = null, concluindo = null, ultimaLista = [];
+$('som').checked = store.get('som') !== '0';
+$('som').onchange = () => store.set('som', $('som').checked ? '1' : '0');
 
-async function api(path, opts = {}) {
-  const r = await fetch(path, { ...opts, headers: { authorization: 'Bearer ' + $('token').value, 'content-type': 'application/json' } });
-  const data = await r.json();
-  if (!r.ok) throw new Error(data.erro || r.statusText);
-  return data;
+function bip() {
+  if (!$('som').checked) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)(); const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination); o.frequency.value = 880; g.gain.value = 0.15; o.start(); o.stop(ctx.currentTime + 0.35);
+  } catch { /* navegador bloqueou o áudio */ }
 }
-function el(tag, cls, txt) { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; }
-function hora(iso) { return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
 
-function card(o) {
-  const c = el('div', 'card p' + Math.min(o.prioridade, 4));
-  const top = el('div', 'top');
-  top.append(el('span', '', 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '')), el('span', 'mute', hora(o.abertaEm)));
-  c.append(top, el('div', '', o.resumo));
-  if (!o.contaCadastrada) c.append(el('div', 'warn', 'Conta não cadastrada'));
+function aviso(texto) { $('erro').textContent = texto; }
+
+function card(o, nova) {
+  const p = Math.min(o.prioridade, 4);
+  const c = el('div', 'cartao ocorrencia p' + p + (nova ? ' nova' : ''));
+  const l1 = el('div', 'linha');
+  l1.append(el('span', 'titulo', 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '')), el('span', 'selo p' + p, NIVEIS[p]));
+  c.append(l1);
+  const l2 = el('div', 'linha'); l2.append(el('span', '', o.resumo), el('span', 'mute', haQuanto(o.abertaEm))); c.append(l2);
+  if (!o.contaCadastrada) c.append(el('div', 'aviso', 'Conta não cadastrada'));
   if (o.cliente && o.cliente.endereco) c.append(el('div', 'mute', o.cliente.endereco));
   if (o.cliente && o.situacao === 'em_atendimento') {
-    if (o.cliente.palavraChave || o.cliente.contraSenha) c.append(el('div', 'chave', 'Palavra-chave: ' + (o.cliente.palavraChave || '-') + ' · Contra-senha: ' + (o.cliente.contraSenha || '-')));
-    for (const ct of o.cliente.contatos) c.append(el('div', 'mute', ct.ordem + '. ' + ct.nome + (ct.telefone ? ' · ' + ct.telefone : '')));
+    if (o.cliente.palavraChave || o.cliente.contraSenha) c.append(el('div', 'chaves', 'Palavra-chave: ' + (o.cliente.palavraChave || '-') + '  ·  Contra-senha: ' + (o.cliente.contraSenha || '-')));
+    if (o.cliente.cameras && o.cliente.cameras.length) {
+      const cams = el('div', 'cameras');
+      for (const cam of o.cliente.cameras) { const a = el('a', '', '📹 ' + cam.nome + (cam.marca ? ' · ' + cam.marca : '')); a.href = cam.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; cams.append(a); }
+      c.append(cams);
+    }
+    if (o.cliente.contatos.length) {
+      const d = el('div', 'providencias');
+      for (const ct of o.cliente.contatos) {
+        const linha = el('div', '', ct.ordem + '. ' + ct.nome + (ct.telefone ? ' · ' : ''));
+        if (ct.telefone) { const a = el('a', '', ct.telefone); a.href = 'tel:' + ct.telefone.replace(/[^\d+]/g, ''); linha.append(a); }
+        d.append(linha);
+      }
+      c.append(d);
+    }
   }
-  for (const e of o.eventos.slice(-4)) c.append(el('div', 'mute', hora(e.em) + ' · ' + e.codigo + ' ' + e.descricao + (e.zona ? ' · zona ' + e.zona : '')));
+  const ev = el('ul', 'eventos');
+  for (const e of o.eventos.slice(-4)) ev.append(el('li', '', hora(e.em) + ' · ' + e.codigo + ' ' + e.descricao + (e.zona ? ' · zona ' + e.zona : '')));
+  c.append(ev);
   if (o.operador) c.append(el('div', 'mute', 'Operador: ' + o.operador));
   if (o.adiadaAte) c.append(el('div', 'mute', 'Volta à fila às ' + hora(o.adiadaAte)));
-  if (o.situacao === 'em_atendimento' && o.operador === $('operador').value.trim()) {
+  if (o.situacao === 'em_atendimento' && o.operador === eu.nome) {
     const a = el('div', 'acoes');
-    const concluir = el('button', 'main', 'Concluir');
-    concluir.onclick = async () => {
-      const motivo = prompt('Motivo da conclusão:'); if (!motivo) return;
-      const conclusao = prompt('Texto de conclusão (opcional):') || '';
-      try { await api('/api/ocorrencias/' + o.id + '/concluir', { method: 'POST', body: JSON.stringify({ operador: o.operador, motivo, conclusao }) }); load(); } catch (e) { $('erro').textContent = e.message; }
-    };
-    const adiar = el('button', '', 'Adiar 30 min');
-    adiar.onclick = async () => {
-      try { await api('/api/ocorrencias/' + o.id + '/adiar', { method: 'POST', body: JSON.stringify({ operador: o.operador, ate: new Date(Date.now() + 30 * 60000).toISOString() }) }); load(); } catch (e) { $('erro').textContent = e.message; }
+    const concluir = el('button', 'principal', 'Concluir');
+    concluir.onclick = () => { concluindo = o; $('dlg-resumo').textContent = 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '') + ' · ' + o.resumo; $('motivo').value = ''; $('conclusao').value = ''; $('dlg-erro').textContent = ''; $('dlg-concluir').showModal(); $('motivo').focus(); };
+    const adiar = el('select'); adiar.style.width = 'auto';
+    adiar.append(new Option('Adiar…', ''), new Option('15 minutos', '15'), new Option('30 minutos', '30'), new Option('1 hora', '60'));
+    adiar.onchange = async () => {
+      if (!adiar.value) return;
+      try { await api('/api/ocorrencias/' + o.id + '/adiar', { method: 'POST', body: JSON.stringify({ ate: new Date(Date.now() + Number(adiar.value) * 60000).toISOString() }) }); toast('Ocorrência adiada'); load(); } catch (e) { aviso(e.message); adiar.value = ''; }
     };
     a.append(concluir, adiar); c.append(a);
   }
   return c;
 }
 
+const LIMITE_SILENCIO_MIN = 10;
+function mostrarFeed(st) {
+  const f = $('feed');
+  const base = new Date(st.ultimoEventoEm || st.iniciadoEm).getTime();
+  const min = Math.floor((new Date(st.agora).getTime() - base) / 60000);
+  const ruim = min >= LIMITE_SILENCIO_MIN;
+  f.className = 'feed' + (ruim ? ' ruim' : '');
+  f.textContent = st.ultimoEventoEm
+    ? (ruim ? '⚠ Sem eventos há ' + min + ' min. Confira o Active Net' : 'Último evento ' + haQuanto(st.ultimoEventoEm))
+    : (ruim ? '⚠ Nenhum evento desde que o sistema iniciou (' + min + ' min)' : 'Aguardando eventos…');
+}
+
 async function load() {
   try {
-    const lista = await api('/api/ocorrencias');
-    $('erro').textContent = '';
-    for (const id of ['aguardando', 'pendente', 'em_atendimento']) $(id).replaceChildren(...lista.filter((o) => o.situacao === id).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm)).map(card));
-  } catch (e) { $('erro').textContent = e.message; }
+    const [lista, st, voce] = await Promise.all([api('/api/ocorrencias'), api('/api/estado'), api('/api/eu')]);
+    mostrarFeed(st);
+    if (eu.nome && voce.disponivel !== disponivel) { disponivel = voce.disponivel; mostrarEstado(); }
+    ultimaLista = lista; aviso('');
+    const ids = new Set(lista.map((o) => o.id));
+    const novas = conhecidas ? lista.filter((o) => !conhecidas.has(o.id)) : [];
+    conhecidas = ids;
+    if (novas.some((o) => o.prioridade <= 2) || (novas.length && disponivel && novas.some((o) => o.operador === eu.nome))) bip();
+    for (const id of ['aguardando', 'pendente', 'em_atendimento']) {
+      const col = lista.filter((o) => o.situacao === id).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));
+      $('n-' + id).textContent = col.length;
+      $(id).replaceChildren(...(col.length ? col.map((o) => card(o, novas.includes(o))) : [el('div', 'vazio', 'Nada por aqui')]));
+    }
+  } catch (e) { aviso(e.message); }
+}
+
+function mostrarEstado() {
+  $('bolinha').className = 'bolinha' + (disponivel ? ' on' : '');
+  $('estado').textContent = disponivel ? 'Disponível para atender' : 'Indisponível';
+  $('disp').textContent = disponivel ? 'Ficar indisponível' : 'Ficar disponível';
+  $('disp').className = disponivel ? '' : 'principal';
 }
 
 $('disp').onclick = async () => {
-  const nome = $('operador').value.trim(); if (!nome) { $('erro').textContent = 'Informe o nome do operador'; return; }
-  store.set('token', $('token').value); store.set('operador', nome);
-  disponivel = !disponivel;
-  try { await api('/api/operadores', { method: 'POST', body: JSON.stringify({ nome, disponivel }) }); $('disp').textContent = disponivel ? 'Ficar indisponível' : 'Ficar disponível'; load(); } catch (e) { disponivel = !disponivel; $('erro').textContent = e.message; }
+  try { await api('/api/operadores', { method: 'POST', body: JSON.stringify({ disponivel: !disponivel }) }); disponivel = !disponivel; mostrarEstado(); load(); } catch (e) { aviso(e.message); }
 };
-setInterval(load, 2000); load();
+$('cancelar').onclick = () => $('dlg-concluir').close();
+$('form-concluir').onsubmit = async (ev) => {
+  ev.preventDefault();
+  try {
+    await api('/api/ocorrencias/' + concluindo.id + '/concluir', { method: 'POST', body: JSON.stringify({ motivo: $('motivo').value, conclusao: $('conclusao').value }) });
+    $('dlg-concluir').close(); toast('Ocorrência concluída'); load();
+  } catch (e) { $('dlg-erro').textContent = e.message; }
+};
+
+(async () => {
+  eu = await iniciarTopo('fila');
+  if (!eu.nome) { $('disp').disabled = true; $('estado').textContent = 'Acesso de serviço'; }
+  disponivel = eu.disponivel; mostrarEstado();
+  setInterval(load, 2000); load();
+})();
 </script>
 </body>
 </html>
