@@ -1,8 +1,12 @@
 import { timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { join } from 'node:path';
-import { eventoPrincipal, planoPara, PREFIXO_PASSO, tituloOcorrencia } from '../incidents/planos.js';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseContactId } from '../protocols/contactId.js';
+import type { AlarmEvent } from '../protocols/types.js';
+import { CONTA_BASE, eventoPrincipal, planoPara, PREFIXO_PASSO, tituloOcorrencia } from '../incidents/planos.js';
 import type { Ocorrencia } from '../incidents/queue.js';
 import type { Central } from '../central.js';
 import { conferirSenha, hashSenha, SENHA_MINIMA } from '../auth/senha.js';
@@ -12,7 +16,7 @@ import type { Cofre } from '../portaria/cofre.js';
 import { ErroEquipamento, lerEventoEquipamento } from '../portaria/hikvision.js';
 import { lerImportacao, pessoaValida, rotuloUnidade, UnidadeDuplicadaError, type Equipamento, type NovaUnidade, type NovoAtendimento, type Pessoa } from '../portaria/tipos.js';
 import {
-  ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError,
+  AJUSTES_PADRAO, ContaDuplicadaError, LoginDuplicadoError, validarAjustes, NaoEncontradoError, RotaDuplicadaError,
   type Cliente, type NovoCliente, type Papel, type Repositorio, type Rota, type Usuario,
 } from '../store/repositorio.js';
 
@@ -33,7 +37,29 @@ export interface ApiOptions {
   aoVivo?: PortariaAoVivo;
   cofre?: Cofre;
   urlEventos?: string;
+  // Tela Configurações: gerador de eventos de teste e o estado da recepção (portas, feed da base, banco).
+  simular?: (empresaId: number, e: AlarmEvent) => void;
+  recepcao?: () => Recepcao;
 }
+
+export interface Recepcao {
+  banco: string;
+  surgard: { porta: number; conexoes: number; ultimoSinal: string | null; semSinal: boolean; limiteSeg: number } | null;
+  dc09: { porta: number };
+}
+
+// Eventos que o administrador pode gerar para testar, no formato Contact ID (qualificador, código, partição, zona).
+const TESTES: Record<string, { rotulo: string; cid: string }> = {
+  disparo: { rotulo: 'Disparo de alarme (zona 1)', cid: '1130 01 001' },
+  panico: { rotulo: 'Pânico', cid: '1120 01 000' },
+  energia: { rotulo: 'Falha de energia', cid: '1301 00 000' },
+  bateria: { rotulo: 'Bateria baixa da central', cid: '1302 00 000' },
+  sem_internet: { rotulo: 'Central sem comunicação (internet do cliente)', cid: '1350 00 000' },
+  tamper: { rotulo: 'Tampa do sensor aberta (zona 2)', cid: '1383 01 002' },
+  desarme: { rotulo: 'Desarme pelo usuário 1', cid: '1401 01 001' },
+  arme: { rotulo: 'Arme pelo usuário 1', cid: '3401 01 001' },
+  restauracao: { rotulo: 'Restauração do disparo (zona 1)', cid: '3130 01 001' },
+};
 
 function clienteResumo(c: Cliente | undefined, completo: boolean) {
   if (!c) return null;
@@ -48,7 +74,8 @@ function clienteResumo(c: Cliente | undefined, completo: boolean) {
 }
 
 function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false) {
-  const cadastrada = comCadastro ? cliente !== undefined : o.contaCadastrada;
+  // O aviso da base não é de cliente: não pede cadastro.
+  const cadastrada = o.conta === CONTA_BASE || (comCadastro ? cliente !== undefined : o.contaCadastrada);
   const feitos = new Set(o.acoes.filter((a) => a.descricao.startsWith(PREFIXO_PASSO)).map((a) => a.descricao.slice(PREFIXO_PASSO.length)));
   return {
     id: o.id,
@@ -91,6 +118,7 @@ function clienteIp(req: IncomingMessage): string {
   return xff || req.socket.remoteAddress || '?';
 }
 const INICIO = new Date();
+const VERSAO = (JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../package.json'), 'utf8')) as { version: string }).version;
 
 function cookieDe(req: IncomingMessage): string | undefined {
   for (const parte of (req.headers.cookie ?? '').split(';')) {
@@ -125,12 +153,14 @@ const PAGINAS: Record<string, { arquivo: string; tipo: string; publica?: boolean
   '/condominios.html': { arquivo: 'condominios.html', tipo: 'text/html', empresa: true, admin: true },
   '/usuarios.html': { arquivo: 'usuarios.html', tipo: 'text/html', admin: true },
   '/empresas.html': { arquivo: 'empresas.html', tipo: 'text/html', plataforma: true },
+  '/configuracoes.html': { arquivo: 'configuracoes.html', tipo: 'text/html', empresa: true, admin: true },
   '/login.html': { arquivo: 'login.html', tipo: 'text/html', publica: true },
   '/app.css': { arquivo: 'app.css', tipo: 'text/css', publica: true },
   '/app.js': { arquivo: 'app.js', tipo: 'application/javascript', publica: true },
-  '/logo.jpg': { arquivo: 'logo.jpg', tipo: 'image/jpeg', publica: true },
+  '/logo-recortada.png': { arquivo: 'logo-recortada.png', tipo: 'image/png', publica: true },
   '/logo-icone.png': { arquivo: 'logo-icone.png', tipo: 'image/png', publica: true },
   '/favicon.png': { arquivo: 'favicon.png', tipo: 'image/png', publica: true },
+  '/fontes/inter.woff2': { arquivo: 'fontes/inter.woff2', tipo: 'font/woff2', publica: true },
 };
 
 function usuarioPublico(u: Usuario) {
@@ -435,8 +465,9 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         if (q && pagina.plataforma && q.empresaId !== null) return ir('/');
         if (q && pagina.admin && q.papel !== 'admin') return ir(q.empresaId === null ? '/empresas.html' : '/');
         const caminho = join(opts.publicDir, pagina.arquivo);
-        const conteudo = pagina.tipo.startsWith('image/') ? await readFile(caminho) : await readFile(caminho, 'utf8');
-        const cache: Record<string, string> = pagina.tipo.startsWith('image/') ? { 'cache-control': 'public, max-age=86400' } : pagina.publica ? {} : { 'cache-control': 'no-store' };
+        const binario = pagina.tipo.startsWith('image/') || pagina.tipo.startsWith('font/');
+        const conteudo = binario ? await readFile(caminho) : await readFile(caminho, 'utf8');
+        const cache: Record<string, string> = binario ? { 'cache-control': 'public, max-age=86400' } : pagina.publica ? {} : { 'cache-control': 'no-store' };
         return send(res, 200, conteudo, pagina.tipo, cache);
       }
       if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, { ok: true });
@@ -475,6 +506,10 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         return send(res, 200, usuarioPublico(u), 'application/json', { 'set-cookie': cookieSessao(req, token, 12 * 3600) });
       }
       if (!q) return send(res, 401, { erro: 'Faça login' });
+      // Durante a troca de turno a tela fica travada: nada muda até alguém entrar no turno ou quem saía destravar.
+      if (q.sessao?.travada && req.method !== 'GET' && !url.pathname.startsWith('/api/turno')) {
+        return send(res, 423, { erro: 'Tela travada na troca de turno' });
+      }
 
       if (req.method === 'POST' && url.pathname === '/api/logout') {
         sessoes.encerrar(q.token);
@@ -487,6 +522,7 @@ export function createApi(central: Central, opts: ApiOptions): Server {
           login: q.sessao?.login ?? null, nome: q.nome ?? null, papel: q.papel, plataforma: q.empresaId === null,
           empresa: empresa ? { id: empresa.id, nome: empresa.nome } : null,
           disponivel: q.nome && empresa ? central.fila(empresa.id).estaDisponivel(q.nome) : false,
+          travada: q.sessao?.travada === true,
         });
       }
       if (req.method === 'POST' && url.pathname === '/api/senha') {
@@ -579,9 +615,92 @@ export function createApi(central: Central, opts: ApiOptions): Server {
       const fila = central.fila(eid);
       const clientes = central.clientes(eid);
 
+      // Troca de turno no mesmo computador: quem sai escolhe quem entra, e quem entra só digita a própria senha.
+      if (url.pathname === '/api/turno/iniciar' || url.pathname === '/api/turno/cancelar') {
+        if (!q.sessao) return send(res, 400, { erro: 'Disponível só para quem entrou com usuário' });
+        if (req.method !== 'POST') return send(res, 405, { erro: 'Método não permitido' });
+        if (url.pathname.endsWith('/iniciar')) { q.sessao.travada = true; return send(res, 200, { ok: true }); }
+        const body = await readJson(req);
+        const ip = `ip|${clienteIp(req)}`;
+        const chave = `destravar|${q.sessao.usuarioId}|${ip}`;
+        if (sessoes.bloqueado(chave) || sessoes.bloqueado(ip, 25)) return send(res, 429, { erro: 'Muitas tentativas. Aguarde alguns minutos.' });
+        const u = await repo.buscarUsuario(q.sessao.login);
+        if (!u || !(await conferirSenha(String(body.senha ?? ''), u.senhaHash))) {
+          sessoes.registrarFalha(chave);
+          sessoes.registrarFalha(ip);
+          return send(res, 403, { erro: 'Senha incorreta' });
+        }
+        sessoes.limparFalhas(chave);
+        q.sessao.travada = false;
+        return send(res, 200, { ok: true });
+      }
+      if (url.pathname === '/api/turno') {
+        if (!q.sessao) return send(res, 400, { erro: 'Disponível só para quem entrou com usuário' });
+        const colegas = (await repo.listarUsuarios(eid)).filter((u) => u.ativo && u.id !== q.sessao!.usuarioId);
+        if (req.method === 'GET') {
+          const comigo = fila.list().filter((o) => o.situacao === 'em_atendimento' && o.operador === q.nome).length;
+          return send(res, 200, { colegas: colegas.map((u) => ({ id: u.id, nome: u.nome })), comigo });
+        }
+        if (req.method !== 'POST') return send(res, 405, { erro: 'Método não permitido' });
+        const body = await readJson(req);
+        const ip = `ip|${clienteIp(req)}`;
+        const chave = `turno|${eid}|${Number(body.usuarioId)}|${ip}`;
+        if (sessoes.bloqueado(chave) || sessoes.bloqueado(ip, 25)) return send(res, 429, { erro: 'Muitas tentativas. Aguarde alguns minutos.' });
+        const u = colegas.find((c) => c.id === Number(body.usuarioId));
+        if (!u) return send(res, 400, { erro: 'Escolha quem vai entrar no turno' });
+        if (!(await conferirSenha(String(body.senha ?? ''), u.senhaHash))) {
+          sessoes.registrarFalha(chave);
+          sessoes.registrarFalha(ip);
+          // 403 e não 401: 401 faria a tela de quem está saindo cair no login.
+          return send(res, 403, { erro: 'Senha incorreta' });
+        }
+        sessoes.limparFalhas(chave);
+        if (u.nome === q.nome) return send(res, 400, { erro: 'Quem entra precisa ser outra pessoa' });
+        const passadas = fila.passarTurno(q.nome!, u.nome);
+        sessoes.encerrar(q.token);
+        const token = sessoes.criar({ usuarioId: u.id, empresaId: u.empresaId, login: u.login, nome: u.nome, papel: u.papel });
+        return send(res, 200, { nome: u.nome, passadas: passadas.length }, 'application/json', { 'set-cookie': cookieSessao(req, token, 12 * 3600) });
+      }
       if (req.method === 'GET' && url.pathname === '/api/estado') {
         const ultimo = opts.ultimoEvento?.(eid);
-        return send(res, 200, { agora: new Date().toISOString(), iniciadoEm: INICIO.toISOString(), ultimoEventoEm: ultimo?.toISOString() ?? null });
+        const sg = opts.recepcao?.().surgard;
+        return send(res, 200, {
+          agora: new Date().toISOString(), iniciadoEm: INICIO.toISOString(), ultimoEventoEm: ultimo?.toISOString() ?? null,
+          base: sg ? { semSinal: sg.semSinal, conexoes: sg.conexoes } : null,
+        });
+      }
+      // ---- Configurações da empresa (administrador): regras da fila, estado da recepção e eventos de teste.
+      if (url.pathname === '/api/configuracoes' || url.pathname === '/api/configuracoes/teste') {
+        exigirAdmin(q);
+        const empresa = central.empresa(eid)!;
+        if (url.pathname.endsWith('/teste')) {
+          if (req.method === 'GET') return send(res, 200, Object.entries(TESTES).map(([tipo, t]) => ({ tipo, rotulo: t.rotulo })));
+          if (req.method !== 'POST' || !opts.simular) return send(res, 405, { erro: 'Gerador de eventos desligado' });
+          const body = await readJson(req);
+          const conta = String(body.conta ?? '').trim().toUpperCase();
+          if (!/^[0-9A-F]{1,6}$/.test(conta)) throw new Error('Informe a conta (até 6 dígitos)');
+          const t = TESTES[String(body.tipo)];
+          if (!t) throw new Error('Escolha o tipo de evento');
+          const cid = parseContactId(t.cid);
+          const e: AlarmEvent = {
+            receivedAt: new Date().toISOString(), transport: 'tcp', remote: `teste por ${q.nome ?? 'admin'}`, protocol: 'INTERNO', account: conta,
+            line: '0', sequence: '0000', encrypted: false, raw: t.cid, ...cid, description: `${cid.description} (teste)`,
+          };
+          opts.simular(eid, e);
+          return send(res, 200, { ok: true, conta, descricao: e.description });
+        }
+        if (req.method === 'PUT') {
+          const body = await readJson(req);
+          const ajustes = { ...empresa.ajustes, ...validarAjustes(body) };
+          for (const k of Object.keys(body)) if (body[k] === null || body[k] === '') delete (ajustes as Record<string, unknown>)[k];
+          await repo.atualizarEmpresa(eid, { ajustes });
+          await central.recarregarEmpresas();
+        } else if (req.method !== 'GET') return send(res, 405, { erro: 'Método não permitido' });
+        const atual = central.empresa(eid)!;
+        return send(res, 200, {
+          empresa: atual.nome, ajustes: { ...AJUSTES_PADRAO, ...atual.ajustes }, padrao: AJUSTES_PADRAO, personalizados: Object.keys(atual.ajustes),
+          recepcao: opts.recepcao?.() ?? null, versao: VERSAO, iniciadoEm: INICIO.toISOString(),
+        });
       }
       if (req.method === 'GET' && (url.pathname === '/api/historico' || url.pathname === '/api/historico.csv')) {
         const ehCsv = url.pathname.endsWith('.csv');

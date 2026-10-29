@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configurações · Shop Sei Monitoramento</title>
+<link rel="icon" href="/favicon.png">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main class="pagina configuracoes">
+  <h1 style="font-size:20px;margin:0 0 12px">Configurações</h1>
+  <div class="grade-config">
+    <section class="cartao painel">
+      <h2>Recepção dos eventos</h2>
+      <dl class="dados" id="recepcao"><dt>Carregando…</dt><dd></dd></dl>
+      <p class="mute pequeno">Portas, domínio e senhas do servidor ficam no arquivo de instalação (<code>deploy/.env</code>). Mudar exige reiniciar o sistema.</p>
+    </section>
+    <form id="regras" class="cartao painel">
+      <h2>Regras da fila</h2>
+      <label>Chamados por operador ao mesmo tempo <input id="limitePorOperador" type="number" min="1" max="10" required></label>
+      <label>Espera da falha de energia antes de ir à fila (minutos, 0 = vai direto) <input id="esperaEnergiaMin" type="number" min="0" max="240" required></label>
+      <p class="mute pequeno">A falha de energia costuma voltar sozinha. Se a restauração chegar durante a espera, ela fica anotada e o operador conclui do mesmo jeito.</p>
+      <div id="msg-regras" class="msg" role="status"></div>
+      <div><button class="marca-btn" type="submit">Salvar regras</button></div>
+    </form>
+    <form id="teste" class="cartao painel">
+      <h2>Testar o sistema</h2>
+      <p class="mute pequeno">Gera um evento como se tivesse vindo da central, pelo mesmo caminho dos eventos reais. Ele entra na fila marcado “(teste)” e o operador atende e conclui normalmente.</p>
+      <label>Conta <input id="conta" required placeholder="ex.: 0043" autocomplete="off" list="contas"><datalist id="contas"></datalist></label>
+      <label>Evento <select id="tipo" required></select></label>
+      <div id="msg-teste" class="msg" role="status"></div>
+      <div><button class="marca-btn" type="submit">Gerar evento de teste</button></div>
+    </form>
+  </div>
+</main>
+<script src="/app.js"></script>
+<script>
+function linha(dl, rotulo, valor, classe) {
+  dl.append(el('dt', '', rotulo));
+  const dd = el('dd', classe || '', valor); dl.append(dd);
+}
+function mostrar(c) {
+  const dl = $('recepcao'); dl.replaceChildren();
+  const r = c.recepcao;
+  if (r && r.surgard) {
+    const s = r.surgard;
+    linha(dl, 'Feed do Active Net (Sur-Gard)', 'Porta ' + s.porta);
+    linha(dl, 'Internet da base', s.semSinal ? '⚠ Sem sinal: confira a internet e a ponte no PC do Active Net' : s.conexoes ? '● Conectada' + (s.conexoes > 1 ? ' (' + s.conexoes + ' pontes)' : '') : 'Esperando a ponte conectar', s.semSinal ? 'ruim' : s.conexoes ? 'bom' : '');
+    linha(dl, 'Último sinal da base', s.ultimoSinal ? new Date(s.ultimoSinal).toLocaleString('pt-BR') + ' (' + haQuanto(s.ultimoSinal) + ')' : 'Nenhum ainda');
+    linha(dl, 'Aviso de base sem sinal', 'Depois de ' + s.limiteSeg + ' s sem nada chegar');
+  } else {
+    linha(dl, 'Feed do Active Net (Sur-Gard)', 'Desligado (SURGARD_TCP_PORTA não definida)');
+  }
+  if (r) linha(dl, 'Receptora IP (SIA DC-09)', 'Porta ' + r.dc09.porta);
+  if (r) linha(dl, 'Banco de dados', r.banco);
+  linha(dl, 'Versão do sistema', c.versao);
+  linha(dl, 'Sistema iniciado', new Date(c.iniciadoEm).toLocaleString('pt-BR'));
+  $('limitePorOperador').value = c.ajustes.limitePorOperador;
+  $('esperaEnergiaMin').value = c.ajustes.esperaEnergiaMin;
+}
+async function carregar() {
+  try { mostrar(await api('/api/configuracoes')); } catch (e) { mensagem('msg-regras', e.message, 'erro'); }
+}
+$('regras').onsubmit = async (ev) => {
+  ev.preventDefault();
+  try {
+    mostrar(await api('/api/configuracoes', { method: 'PUT', body: JSON.stringify({ limitePorOperador: Number($('limitePorOperador').value), esperaEnergiaMin: Number($('esperaEnergiaMin').value) }) }));
+    mensagem('msg-regras', 'Regras salvas', 'ok');
+  } catch (e) { mensagem('msg-regras', e.message, 'erro'); }
+};
+$('teste').onsubmit = async (ev) => {
+  ev.preventDefault();
+  try {
+    const r = await api('/api/configuracoes/teste', { method: 'POST', body: JSON.stringify({ conta: $('conta').value, tipo: $('tipo').value }) });
+    mensagem('msg-teste', 'Evento enviado: conta ' + r.conta + ' · ' + r.descricao + '. Veja na Fila.', 'ok');
+  } catch (e) { mensagem('msg-teste', e.message, 'erro'); }
+};
+(async () => {
+  await iniciarTopo('configuracoes');
+  carregar(); setInterval(carregar, 5000);
+  try {
+    const tipos = await api('/api/configuracoes/teste');
+    $('tipo').replaceChildren(...tipos.map((t) => new Option(t.rotulo, t.tipo)));
+    const clientes = await api('/api/clientes');
+    $('contas').replaceChildren(...clientes.flatMap((c) => c.contas.map((n) => new Option(c.nome, n))));
+    if (clientes[0] && clientes[0].contas[0]) $('conta').value = clientes[0].contas[0];
+  } catch (e) { mensagem('msg-teste', e.message, 'erro'); }
+})();
+</script>
+</body>
+</html>

@@ -33,6 +33,8 @@ export interface QueueOptions {
   // Minutos que uma ocorrência nova espera em "pendente" antes de ir à fila (ex.: falha de energia,
   // que costuma voltar sozinha). A restauração é anotada e o operador conclui do mesmo jeito.
   esperaMin?: (e: AlarmEvent) => number;
+  // Quantos chamados um operador atende ao mesmo tempo (padrão 3).
+  limitePorOperador?: () => number;
 }
 
 // Eventos que exigem atendimento de um operador. Teste e supervisão só ficam no histórico;
@@ -92,6 +94,23 @@ export class IncidentQueue {
     }
     this.distribute();
     return devolvidas;
+  }
+
+  // Troca de turno: o que estava em atendimento com quem sai passa direto para quem entra (sem voltar à
+  // fila nem perder o histórico). Quem sai fica indisponível e quem entra, disponível.
+  passarTurno(de: string, para: string): Ocorrencia[] {
+    this.operators.set(de, { disponivel: false });
+    this.operators.set(para, { disponivel: true });
+    const passadas: Ocorrencia[] = [];
+    for (const i of this.incidents) {
+      if (i.situacao !== 'em_atendimento' || i.operador !== de) continue;
+      i.operador = para;
+      i.acoes.push({ em: this.now(), descricao: `Troca de turno: passada de ${de} para ${para}` });
+      this.changed(i);
+      passadas.push(i);
+    }
+    this.distribute();
+    return passadas;
   }
 
   // Tira da memória as ocorrências encerradas há mais de maxIdadeMs (continuam no banco).
@@ -198,8 +217,8 @@ export class IncidentQueue {
         bestLoad = load;
       }
     }
-    // Um operador atende até 3 ocorrências ao mesmo tempo.
-    return bestLoad < 3 ? best : undefined;
+    // Cada operador atende até o limite da empresa ao mesmo tempo.
+    return bestLoad < (this.opts.limitePorOperador?.() ?? 3) ? best : undefined;
   }
 
   waiting(): Ocorrencia[] {

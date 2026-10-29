@@ -29,7 +29,7 @@
     <h3>Concluir ocorrência</h3>
     <p class="mute" id="dlg-resumo" style="margin:0 0 14px"></p>
     <label>Motivo <input id="motivo" list="motivos" required placeholder="Ex.: Acionamento indevido">
-      <datalist id="motivos"><option value="Acionamento indevido"><option value="Alarme falso"><option value="Falha de energia do cliente"><option value="Falha de comunicação"><option value="Contato com o cliente realizado"><option value="Providências acionadas"></datalist>
+      <datalist id="motivos"><option value="Acionamento indevido"><option value="Alarme falso"><option value="Falha de energia do cliente"><option value="Falha de comunicação"><option value="Contato com o cliente realizado"><option value="Providências acionadas"><option value="Cliente confirmou a palavra-chave"><option value="Veículo de apoio verificou o local"><option value="Técnico no local"></datalist>
     </label>
     <label>Texto da conclusão (opcional) <textarea id="conclusao" rows="3"></textarea></label>
     <div id="dlg-erro" class="msg erro"></div>
@@ -54,6 +54,15 @@ function bip() {
 }
 
 function aviso(texto) { $('erro').textContent = texto; }
+
+// "Ciente" no disparo: já abre a primeira câmera do cliente numa janela pop-up (precisa ser no clique, senão o
+// navegador bloqueia a janela); as outras ficam nos botões do pop-up e do cartão.
+function cienteDoDisparo(o) {
+  const cam = o.cliente && o.cliente.cameras && o.cliente.cameras[0];
+  if (cam) abrirCamera(cam, 0);
+  return anotar(o, 'Ciente do disparo, iniciando atendimento' + (cam ? ' (câmera ' + cam.nome + ' aberta)' : ''));
+}
+const ACOES_RAPIDAS = ['Cliente confirmou a palavra-chave', 'Veículo de apoio a caminho', 'Técnico no local'];
 const rascunhos = {};
 
 async function anotar(o, descricao) {
@@ -64,7 +73,7 @@ function card(o, nova) {
   const p = Math.min(o.prioridade, 4);
   const c = el('div', 'cartao ocorrencia p' + p + (nova ? ' nova' : '') + (o.alarme && o.situacao !== 'pendente' ? ' disparo' : ''));
   const l1 = el('div', 'linha');
-  l1.append(el('span', 'titulo', 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '')), el('span', 'selo p' + p, NIVEIS[p]));
+  l1.append(el('span', 'titulo', rotuloConta(o)), el('span', 'selo p' + p, NIVEIS[p]));
   c.append(l1);
   const l2 = el('div', 'linha'); l2.append(el('span', '', o.resumo), el('span', 'mute', haQuanto(o.abertaEm))); c.append(l2);
   if (!o.contaCadastrada) c.append(el('div', 'aviso', 'Conta não cadastrada'));
@@ -73,7 +82,7 @@ function card(o, nova) {
     if (o.cliente.palavraChave || o.cliente.contraSenha) c.append(el('div', 'chaves', 'Palavra-chave: ' + (o.cliente.palavraChave || '-') + '  ·  Contra-senha: ' + (o.cliente.contraSenha || '-')));
     if (o.cliente.cameras && o.cliente.cameras.length) {
       const cams = el('div', 'cameras');
-      for (const cam of o.cliente.cameras) { const a = el('a', '', '📹 ' + cam.nome + (cam.marca ? ' · ' + cam.marca : '')); a.href = cam.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; cams.append(a); }
+      o.cliente.cameras.forEach((cam, i) => { const a = el('a', '', '📹 ' + cam.nome + (cam.marca ? ' · ' + cam.marca : '')); a.href = cam.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.onclick = (ev) => { if (abrirCamera(cam, i)) ev.preventDefault(); }; cams.append(a); });
       c.append(cams);
     }
     if (o.cliente.instrucoes) { const ins = el('div', 'instrucoes'); ins.append(el('strong', '', 'Instruções do cliente: '), document.createTextNode(o.cliente.instrucoes)); c.append(ins); }
@@ -109,6 +118,15 @@ function card(o, nova) {
       pl.append(l);
     }
     c.append(pl);
+    // Registros rápidos do atendimento: um clique grava a ação com hora e operador.
+    const rapidas = el('div', 'rapidas');
+    for (const texto of ACOES_RAPIDAS) {
+      const feito = o.acoes.some((a) => a.descricao === texto);
+      const b = el('button', 'mini' + (feito ? ' feito' : ''), (feito ? '✓ ' : '') + texto); b.type = 'button';
+      b.onclick = () => anotar(o, texto);
+      rapidas.append(b);
+    }
+    c.append(rapidas);
     const nota = el('form', 'nota');
     const campo = el('input'); campo.placeholder = 'Anotar (ex.: polícia acionada, viatura 12)'; campo.maxLength = 500;
     campo.value = rascunhos[o.id] || ''; campo.dataset.ocorrencia = o.id;
@@ -130,7 +148,7 @@ function card(o, nova) {
   if (o.situacao === 'em_atendimento' && o.operador === eu.nome) {
     const a = el('div', 'acoes');
     const concluir = el('button', 'principal', 'Concluir');
-    concluir.onclick = () => { concluindo = o; $('dlg-resumo').textContent = 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '') + ' · ' + o.resumo; $('motivo').value = ''; $('conclusao').value = ''; $('dlg-erro').textContent = ''; $('dlg-concluir').showModal(); $('motivo').focus(); };
+    concluir.onclick = () => { concluindo = o; $('dlg-resumo').textContent = rotuloConta(o) + ' · ' + o.resumo; $('motivo').value = ''; $('conclusao').value = ''; $('dlg-erro').textContent = ''; $('dlg-concluir').showModal(); $('motivo').focus(); };
     const adiar = el('select'); adiar.style.width = 'auto';
     adiar.append(new Option('Adiar…', ''), new Option('15 minutos', '15'), new Option('30 minutos', '30'), new Option('1 hora', '60'));
     adiar.onchange = async () => {
@@ -148,7 +166,8 @@ function mostrarFeed(st) {
   const base = new Date(st.ultimoEventoEm || st.iniciadoEm).getTime();
   const min = Math.floor((new Date(st.agora).getTime() - base) / 60000);
   const ruim = min >= LIMITE_SILENCIO_MIN;
-  f.className = 'feed' + (ruim ? ' ruim' : '');
+  f.className = 'feed' + (ruim || (st.base && st.base.semSinal) ? ' ruim' : '');
+  if (st.base && st.base.semSinal) { f.textContent = '⚠ Base sem sinal: confira a internet e a ponte do Active Net'; return; }
   f.textContent = st.ultimoEventoEm
     ? (ruim ? '⚠ Sem eventos há ' + min + ' min. Confira o Active Net' : 'Último evento ' + haQuanto(st.ultimoEventoEm))
     : (ruim ? '⚠ Nenhum evento desde que o sistema iniciou (' + min + ' min)' : 'Aguardando eventos…');
@@ -164,7 +183,7 @@ async function load() {
     const novas = conhecidas ? lista.filter((o) => !conhecidas.has(o.id)) : [];
     conhecidas = ids;
     if (novas.some((o) => o.prioridade <= 2 && !o.alarme) || (novas.length && disponivel && novas.some((o) => o.operador === eu.nome && !o.alarme))) bip();
-    atualizarAlarme(lista, eu, (o) => anotar(o, 'Ciente do disparo, iniciando atendimento'), disponivel || !eu.nome ? null : () => $('disp').click());
+    atualizarAlarme(lista, eu, cienteDoDisparo, disponivel || !eu.nome ? null : () => $('disp').click());
     const foco = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.ocorrencia : undefined;
     for (const id of ['aguardando', 'pendente', 'em_atendimento']) {
       const col = lista.filter((o) => o.situacao === id).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));

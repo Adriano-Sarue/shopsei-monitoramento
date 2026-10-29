@@ -2,8 +2,8 @@ import type { Ocorrencia } from '../incidents/queue.js';
 import { PortariaMemoria } from '../portaria/memoria.js';
 import type { AlarmEvent } from '../protocols/types.js';
 import {
-  ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarCliente, validarEmpresa, validarUsuario,
-  type Cliente, type Empresa, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Rota, type UltimoEvento, type Usuario,
+  ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarAjustes, validarCliente, validarEmpresa, validarUsuario,
+  type Ajustes, type Cliente, type Empresa, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Rota, type UltimoEvento, type Usuario,
 } from './repositorio.js';
 
 type ClienteGuardado = Cliente & { empresaId: number };
@@ -36,17 +36,17 @@ export class MemoryRepo implements Repositorio {
   async criarEmpresa(entrada: { nome: string; rotas?: Rota[] }): Promise<Empresa> {
     const v = validarEmpresa(entrada);
     this.checarRotas(v.rotas);
-    const e: Empresa = { id: this.nextEmpresa++, nome: v.nome, ativo: true, rotas: v.rotas };
+    const e: Empresa = { id: this.nextEmpresa++, nome: v.nome, ativo: true, rotas: v.rotas, ajustes: {} };
     this.empresas.push(e);
     return structuredClone(e);
   }
 
-  async atualizarEmpresa(id: number, m: { nome?: string; ativo?: boolean; rotas?: Rota[] }): Promise<Empresa> {
+  async atualizarEmpresa(id: number, m: { nome?: string; ativo?: boolean; rotas?: Rota[]; ajustes?: Ajustes }): Promise<Empresa> {
     const e = this.empresas.find((x) => x.id === id);
     if (!e) throw new NaoEncontradoError(`Empresa ${id} não existe`);
     const v = validarEmpresa({ nome: m.nome ?? e.nome, rotas: m.rotas ?? e.rotas });
     this.checarRotas(v.rotas, id);
-    Object.assign(e, { nome: v.nome, rotas: v.rotas, ativo: m.ativo ?? e.ativo });
+    Object.assign(e, { nome: v.nome, rotas: v.rotas, ativo: m.ativo ?? e.ativo, ajustes: m.ajustes ? validarAjustes(m.ajustes) : e.ajustes });
     return structuredClone(e);
   }
 

@@ -1,7 +1,8 @@
 import { IncidentQueue, type Ocorrencia, type QueueOptions } from './incidents/queue.js';
+import { CONTA_BASE } from './incidents/planos.js';
 import { SupervisaoTeste } from './incidents/supervisao.js';
 import type { AlarmEvent } from './protocols/types.js';
-import { ClienteIndex, normalizarNumero, type Empresa, type Repositorio, type Rota } from './store/repositorio.js';
+import { AJUSTES_PADRAO, ClienteIndex, normalizarNumero, type Empresa, type Repositorio, type Rota } from './store/repositorio.js';
 
 export type Canal = Rota['canal'];
 
@@ -29,7 +30,8 @@ export class Roteador {
 
 export interface CentralOptions {
   onChange?: (o: Ocorrencia) => void;
-  esperaMin?: QueueOptions['esperaMin'];
+  // Espera em "pendente" de cada evento, conforme os ajustes da empresa.
+  esperaMin?: (e: AlarmEvent, empresa: Empresa) => number;
   now?: () => Date;
 }
 
@@ -66,9 +68,10 @@ export class Central {
       this.filas.set(e.id, new IncidentQueue({
         empresaId: e.id,
         proximoId: () => this.proximo++,
-        contaCadastrada: (conta) => indice.porConta(conta) !== undefined,
+        contaCadastrada: (conta) => conta === CONTA_BASE || indice.porConta(conta) !== undefined,
         onChange: this.opts.onChange,
-        esperaMin: this.opts.esperaMin,
+        esperaMin: this.opts.esperaMin && ((ev) => this.opts.esperaMin!(ev, this.empresa(e.id) ?? e)),
+        limitePorOperador: () => (this.empresa(e.id) ?? e).ajustes.limitePorOperador ?? AJUSTES_PADRAO.limitePorOperador,
         now: this.opts.now,
       }));
       this.supervisoes.set(e.id, new SupervisaoTeste((conta) => indice.porConta(conta)?.intervaloTesteHoras, this.opts.now));

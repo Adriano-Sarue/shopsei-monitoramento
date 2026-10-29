@@ -159,3 +159,25 @@ test('evento repetido não cresce sem limite e ocorrências encerradas saem da m
   q.podar(3600_000);
   assert.equal(q.list().length, 0);
 });
+
+test('troca de turno passa os chamados em atendimento direto para quem entra', () => {
+  const q = new IncidentQueue();
+  q.setOperator('Ana', true);
+  q.handleEvent(ev('0013', '1130 01 003'));
+  q.handleEvent(ev('0014', '1130 01 004'));
+  q.registrarAcao(q.list()[0]!.id, 'Ana', 'Ligação para Maria: não atendeu');
+  const passadas = q.passarTurno('Ana', 'Beto');
+  assert.equal(passadas.length, 2);
+  for (const o of q.list()) {
+    assert.equal(o.situacao, 'em_atendimento');
+    assert.equal(o.operador, 'Beto');
+    assert.match(o.acoes.at(-1)!.descricao, /Troca de turno: passada de Ana para Beto/);
+  }
+  // O histórico de quem saiu continua lá.
+  assert.ok(q.list()[0]!.acoes.some((a) => a.operador === 'Ana'));
+  assert.equal(q.estaDisponivel('Ana'), false);
+  assert.equal(q.estaDisponivel('Beto'), true);
+  // Chamado novo vai para quem entrou.
+  q.handleEvent(ev('0015', '1130 01 005'));
+  assert.equal(q.list().find((o) => o.conta === '0015')!.operador, 'Beto');
+});

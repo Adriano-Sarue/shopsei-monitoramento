@@ -209,3 +209,6 @@ CREATE TABLE IF NOT EXISTS aberturas_porta (
   erro TEXT
 );
 CREATE INDEX IF NOT EXISTS aberturas_porta_idx ON aberturas_porta (empresa_id, condominio_id, em DESC);
+
+-- Regras da fila de cada empresa (tela Configurações).
+ALTER TABLE empresas ADD COLUMN IF NOT EXISTS ajustes JSONB NOT NULL DEFAULT '{}';

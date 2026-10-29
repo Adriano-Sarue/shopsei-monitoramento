@@ -111,7 +111,7 @@ test('login por usuário: sessão, perfis, bloqueio e revogação', async () => 
     const c = { ...json, cookie: cookieDe(ok) };
 
     assert.deepEqual(await (await fetch(`${base}/api/eu`, { headers: c })).json(), {
-      login: 'ana', nome: 'Ana', papel: 'operador', plataforma: false, empresa: { id: eid, nome: 'Shop Sei' }, disponivel: false,
+      login: 'ana', nome: 'Ana', papel: 'operador', plataforma: false, empresa: { id: eid, nome: 'Shop Sei' }, disponivel: false, travada: false,
     });
     // Operador não vê cadastro nem usuários, e não abre essas páginas.
     assert.equal((await fetch(`${base}/api/clientes`, { headers: c })).status, 403);
@@ -234,14 +234,144 @@ test('disparo vem marcado como alarme; falha de energia não; logo e ícone são
     const lista = (await (await fetch(`${base}/api/ocorrencias`, { headers: h })).json()) as { conta: string; alarme: boolean }[];
     assert.deepEqual(Object.fromEntries(lista.map((o) => [o.conta, o.alarme])), { '0020': true, '0021': false, '0022': true });
 
-    for (const [caminho, tipo] of [['/logo.jpg', 'image/jpeg'], ['/logo-icone.png', 'image/png'], ['/favicon.png', 'image/png']]) {
+    for (const [caminho, tipo] of [['/logo-recortada.png', 'image/png'], ['/logo-icone.png', 'image/png'], ['/favicon.png', 'image/png'], ['/fontes/inter.woff2', 'font/woff2']]) {
       const r = await fetch(base + caminho);
       assert.equal(r.status, 200, caminho);
       assert.equal(r.headers.get('content-type'), tipo);
       const bytes = Buffer.from(await r.arrayBuffer());
       assert.ok(bytes.length > 1000, caminho);
-      assert.equal(bytes[0], tipo === 'image/png' ? 0x89 : 0xff, caminho);
+      assert.equal(bytes[0], { 'image/png': 0x89, 'image/jpeg': 0xff, 'font/woff2': 0x77 }[tipo!], caminho);
     }
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test('troca de turno: quem entra digita só a senha e recebe os chamados', async () => {
+  const repo = new MemoryRepo();
+  const { id: eid } = await repo.criarEmpresa({ nome: 'Shop Sei', rotas: [] });
+  const { id: outra } = await repo.criarEmpresa({ nome: 'Outra', rotas: [] });
+  await repo.criarUsuario({ empresaId: eid, login: 'ana', nome: 'Ana', papel: 'operador', senhaHash: await hashSenha('senha-ana-1') });
+  const beto = await repo.criarUsuario({ empresaId: eid, login: 'beto', nome: 'Beto', papel: 'operador', senhaHash: await hashSenha('senha-beto-1') });
+  const inativo = await repo.criarUsuario({ empresaId: eid, login: 'caio', nome: 'Caio', papel: 'operador', senhaHash: await hashSenha('senha-caio-1') });
+  await repo.atualizarUsuario(eid, inativo.id, { ativo: false });
+  const estranho = await repo.criarUsuario({ empresaId: outra, login: 'zeca', nome: 'Zeca', papel: 'operador', senhaHash: await hashSenha('senha-zeca-1') });
+  const { queue, server, base } = await montar({ repo });
+  const json = { 'content-type': 'application/json' };
+  const cookieDe = (r: Response) => (r.headers.get('set-cookie') ?? '').split(';')[0]!;
+  const entrar = await fetch(`${base}/api/login`, { method: 'POST', headers: json, body: JSON.stringify({ login: 'ana', senha: 'senha-ana-1' }) });
+  const a = { ...json, cookie: cookieDe(entrar) };
+  const turno = (body: unknown, h = a) => fetch(`${base}/api/turno`, { method: 'POST', headers: h, body: JSON.stringify(body) });
+  try {
+    await fetch(`${base}/api/operadores`, { method: 'POST', headers: a, body: JSON.stringify({ disponivel: true }) });
+    queue.handleEvent(ev('0013', '1130 01 003'));
+    const info = await (await fetch(`${base}/api/turno`, { headers: a })).json() as { colegas: { id: number; nome: string }[]; comigo: number };
+    // Só colegas ativos da mesma empresa, e nunca o próprio operador.
+    assert.deepEqual(info.colegas.map((c) => c.nome), ['Beto']);
+    assert.equal(info.comigo, 1);
+
+    // Ao clicar em "Trocar de turno" a tela trava: nada muda até alguém entrar ou quem saía destravar com a senha.
+    const iniciar = (h = a) => fetch(`${base}/api/turno/iniciar`, { method: 'POST', headers: h, body: '{}' });
+    const cancelar = (senha: string) => fetch(`${base}/api/turno/cancelar`, { method: 'POST', headers: a, body: JSON.stringify({ senha }) });
+    const travada = async (h = a) => ((await (await fetch(`${base}/api/eu`, { headers: h })).json()) as { travada: boolean }).travada;
+    assert.equal(await travada(), false);
+    assert.equal((await iniciar()).status, 200);
+    assert.equal(await travada(), true);
+    assert.equal((await fetch(`${base}/api/operadores`, { method: 'POST', headers: a, body: JSON.stringify({ disponivel: false }) })).status, 423);
+    assert.equal((await fetch(`${base}/api/logout`, { method: 'POST', headers: a, body: '{}' })).status, 423);
+    assert.equal((await fetch(`${base}/api/ocorrencias`, { headers: a })).status, 200);
+    // A senha de quem vai entrar não destrava; só a de quem estava.
+    assert.equal((await cancelar('senha-beto-1')).status, 403);
+    assert.equal(await travada(), true);
+    assert.equal((await cancelar('senha-ana-1')).status, 200);
+    assert.equal(await travada(), false);
+    assert.equal(queue.estaDisponivel('Ana'), true);
+    assert.equal((await iniciar()).status, 200);
+
+    assert.equal((await turno({ usuarioId: beto.id, senha: 'errada' })).status, 403);
+    assert.equal((await turno({ usuarioId: estranho.id, senha: 'senha-zeca-1' })).status, 400);
+    assert.equal((await turno({ usuarioId: inativo.id, senha: 'senha-caio-1' })).status, 400);
+    assert.equal(queue.list()[0]!.operador, 'Ana');
+
+    const ok = await turno({ usuarioId: beto.id, senha: 'senha-beto-1' });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(await ok.json(), { nome: 'Beto', passadas: 1 });
+    const b = { ...json, cookie: cookieDe(ok) };
+    // A sessão de quem saiu acabou; o computador agora é do Beto, já disponível e com o chamado.
+    assert.equal((await fetch(`${base}/api/eu`, { headers: a })).status, 401);
+    const eu = await (await fetch(`${base}/api/eu`, { headers: b })).json() as { nome: string; disponivel: boolean };
+    assert.equal(eu.nome, 'Beto');
+    assert.equal(eu.disponivel, true);
+    assert.equal(await travada(b), false);
+    const [oc] = await (await fetch(`${base}/api/ocorrencias`, { headers: b })).json() as { operador: string; situacao: string; acoes: { descricao: string }[] }[];
+    assert.equal(oc!.operador, 'Beto');
+    assert.equal(oc!.situacao, 'em_atendimento');
+    assert.match(oc!.acoes.at(-1)!.descricao, /passada de Ana para Beto/);
+
+    // Senha errada repetida bloqueia, como no login.
+    const volta = await fetch(`${base}/api/login`, { method: 'POST', headers: json, body: JSON.stringify({ login: 'ana', senha: 'senha-ana-1' }) });
+    const a2 = { ...json, cookie: cookieDe(volta) };
+    for (let i = 0; i < 5; i++) await turno({ usuarioId: beto.id, senha: 'errada' }, a2);
+    assert.equal((await turno({ usuarioId: beto.id, senha: 'senha-beto-1' }, a2)).status, 429);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test('configurações: administrador muda as regras da fila e gera eventos de teste', async () => {
+  const repo = new MemoryRepo();
+  const { id: eid } = await repo.criarEmpresa({ nome: 'Shop Sei', rotas: [{ canal: 'dc09', receptora: '*', linha: '*' }] });
+  await repo.criarUsuario({ empresaId: eid, login: 'adm', nome: 'Adm', papel: 'admin', senhaHash: await hashSenha('senha-adm-1') });
+  await repo.criarUsuario({ empresaId: eid, login: 'ana', nome: 'Ana', papel: 'operador', senhaHash: await hashSenha('senha-ana-1') });
+  const central = new Central(repo);
+  await central.iniciar();
+  const simulados: AlarmEvent[] = [];
+  const server = createApi(central, {
+    publicDir: 'public', port: 0, repo,
+    simular: (empresaId, e) => { simulados.push(e); central.fila(empresaId).handleEvent(e); },
+    recepcao: () => ({ banco: 'Memória', surgard: { porta: 9200, conexoes: 1, ultimoSinal: null, semSinal: true, limiteSeg: 120 }, dc09: { porta: 9000 } }),
+  });
+  const base = `http://127.0.0.1:${await listen(server, 0, '127.0.0.1')}`;
+  const json = { 'content-type': 'application/json' };
+  const entrar = async (login: string, senha: string) => ({ ...json, cookie: ((await fetch(`${base}/api/login`, { method: 'POST', headers: json, body: JSON.stringify({ login, senha }) })).headers.get('set-cookie') ?? '').split(';')[0]! });
+  try {
+    const adm = await entrar('adm', 'senha-adm-1');
+    const ana = await entrar('ana', 'senha-ana-1');
+    // Operador não vê nem muda configurações.
+    assert.equal((await fetch(`${base}/api/configuracoes`, { headers: ana })).status, 403);
+    assert.equal((await fetch(`${base}/configuracoes.html`, { headers: ana, redirect: 'manual' })).status, 302);
+    assert.equal((await fetch(`${base}/configuracoes.html`, { headers: adm })).status, 200);
+    const c = await (await fetch(`${base}/api/configuracoes`, { headers: adm })).json() as { ajustes: { limitePorOperador: number; esperaEnergiaMin: number }; versao: string; recepcao: { surgard: { porta: number } } };
+    assert.deepEqual(c.ajustes, { limitePorOperador: 3, esperaEnergiaMin: 30 });
+    assert.equal(c.recepcao.surgard.porta, 9200);
+    assert.match(c.versao, /^\d+\.\d+\.\d+/);
+    // A Fila também fica sabendo que a base está sem sinal.
+    assert.deepEqual(((await (await fetch(`${base}/api/estado`, { headers: ana })).json()) as { base: unknown }).base, { semSinal: true, conexoes: 1 });
+
+    const put = (b: unknown) => fetch(`${base}/api/configuracoes`, { method: 'PUT', headers: adm, body: JSON.stringify(b) });
+    assert.equal((await put({ limitePorOperador: 0 })).status, 400);
+    assert.equal((await put({ esperaEnergiaMin: 9999 })).status, 400);
+    assert.equal((await put({ limitePorOperador: 1, esperaEnergiaMin: 0 })).status, 200);
+    assert.deepEqual((await repo.listarEmpresas())[0]!.ajustes, { limitePorOperador: 1, esperaEnergiaMin: 0 });
+
+    // Com limite 1, a Ana pega um chamado por vez.
+    await fetch(`${base}/api/operadores`, { method: 'POST', headers: ana, body: JSON.stringify({ disponivel: true }) });
+    const teste = (b: unknown) => fetch(`${base}/api/configuracoes/teste`, { method: 'POST', headers: adm, body: JSON.stringify(b) });
+    assert.equal((await teste({ conta: '0043', tipo: 'nada' })).status, 400);
+    assert.equal((await teste({ conta: '', tipo: 'disparo' })).status, 400);
+    assert.equal((await fetch(`${base}/api/configuracoes/teste`, { method: 'POST', headers: ana, body: JSON.stringify({ conta: '0043', tipo: 'disparo' }) })).status, 403);
+    const r = await teste({ conta: '0043', tipo: 'disparo' });
+    assert.equal(r.status, 200);
+    assert.equal(((await r.json()) as { descricao: string }).descricao, 'Disparo de alarme (teste)');
+    assert.equal((await teste({ conta: '0051', tipo: 'sem_internet' })).status, 200);
+    assert.equal(simulados[0]!.protocol, 'INTERNO');
+    const lista = central.fila(eid).list();
+    assert.equal(lista.length, 2);
+    assert.equal(lista.filter((o) => o.operador === 'Ana').length, 1);
+    assert.equal(lista.find((o) => o.conta === '0051')!.eventos[0]!.description, 'Central sem comunicação (falha de comunicação) (teste)');
+    // Energia vai direto para a fila com espera 0.
+    assert.equal((await teste({ conta: '0062', tipo: 'energia' })).status, 200);
+    assert.equal(central.fila(eid).list().find((o) => o.conta === '0062')!.situacao, 'aguardando');
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

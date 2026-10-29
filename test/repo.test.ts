@@ -4,6 +4,10 @@ import { IncidentQueue, type Ocorrencia } from '../src/incidents/queue.js';
 import { parseContactId } from '../src/protocols/contactId.js';
 import type { AlarmEvent } from '../src/protocols/types.js';
 import { MemoryRepo } from '../src/store/memoryRepo.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { abrirBancoLocal } from '../src/store/bancoLocal.js';
 import { PgRepo } from '../src/store/pgRepo.js';
 import { ClienteIndex, ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, type Repositorio } from '../src/store/repositorio.js';
 
@@ -158,5 +162,21 @@ test('repositório PostgreSQL cumpre o contrato', { skip: !process.env.PG_TEST_U
     await contrato(repo);
   } finally {
     await repo.fechar();
+  }
+});
+
+test('banco local embutido (teste sem instalar banco) cumpre o contrato e guarda os dados', async () => {
+  const pasta = await mkdtemp(join(tmpdir(), 'shopsei-banco-'));
+  try {
+    const repo = new PgRepo(await abrirBancoLocal(pasta));
+    await contrato(repo);
+    await repo.fechar();
+    // Reabrir a mesma pasta traz tudo de volta: é o que o teste no PC precisa depois de reiniciar.
+    const de_novo = new PgRepo(await abrirBancoLocal(pasta));
+    await de_novo.init();
+    assert.equal((await de_novo.listarEmpresas()).length, 2);
+    await de_novo.fechar();
+  } finally {
+    await rm(pasta, { recursive: true, force: true });
   }
 });

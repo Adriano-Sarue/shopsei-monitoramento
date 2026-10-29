@@ -29,7 +29,7 @@ const SIA_CODES: Record<string, SiaCodeInfo> = {
   LB: { description: 'Entrada no modo de programação', category: 'fault', priority: 4 },
   LX: { description: 'Saída do modo de programação', category: 'fault', priority: 4 },
   JA: { description: 'Senha errada digitada', category: 'other', priority: 4 },
-  YC: { description: 'Falha de comunicação', category: 'fault', priority: 3 },
+  YC: { description: 'Central sem comunicação (falha de comunicação)', category: 'fault', priority: 3 },
   OP: { description: 'Desarme (abertura)', category: 'openclose', priority: 5, qualifier: 'new' },
   CL: { description: 'Arme (fechamento)', category: 'openclose', priority: 5, qualifier: 'restore' },
   OA: { description: 'Desarme automático', category: 'openclose', priority: 5, qualifier: 'new' },

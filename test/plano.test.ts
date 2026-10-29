@@ -27,7 +27,8 @@ test('plano de ação segue o evento mais urgente e avisa conta não cadastrada'
   const f = q.handleEvent(ev('0021', '1110 01 001'))!;
   assert.match(planoPara(f, true).join('|'), /Bombeiros/);
   const t = q.handleEvent(eventoInterno('0022', 'TST', 'Falta de teste', new Date()))!;
-  assert.match(planoPara(t, true)[0]!, /outras contas/);
+  assert.match(planoPara(t, true)[0]!, /sem comunicação: pode ser falta de internet/);
+  assert.match(planoPara(t, true)[1]!, /outras contas/);
 });
 
 test('falha de energia espera em pendente; disparo na mesma conta traz de volta na hora', () => {
