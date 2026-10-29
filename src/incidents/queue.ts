@@ -33,6 +33,8 @@ export interface QueueOptions {
   // Minutos que uma ocorrência nova espera em "pendente" antes de ir à fila (ex.: falha de energia,
   // que costuma voltar sozinha). A restauração é anotada e o operador conclui do mesmo jeito.
   esperaMin?: (e: AlarmEvent) => number;
+  // Quantos chamados um operador atende ao mesmo tempo (padrão 3).
+  limitePorOperador?: () => number;
 }
 
 // Eventos que exigem atendimento de um operador. Teste e supervisão só ficam no histórico;
@@ -215,8 +217,8 @@ export class IncidentQueue {
         bestLoad = load;
       }
     }
-    // Um operador atende até 3 ocorrências ao mesmo tempo.
-    return bestLoad < 3 ? best : undefined;
+    // Cada operador atende até o limite da empresa ao mesmo tempo.
+    return bestLoad < (this.opts.limitePorOperador?.() ?? 3) ? best : undefined;
   }
 
   waiting(): Ocorrencia[] {

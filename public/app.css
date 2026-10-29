@@ -300,3 +300,14 @@ dialog.alarme-popup::backdrop { background: rgba(120, 0, 20, .38); }
   @media (prefers-color-scheme: dark) { :root { --card: #1c1f28; --card-forte: #242834; } }
 }
 dialog form[hidden] { display: none; }
+
+/* Configurações */
+.grade-config { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+.grade-config .painel { position: static; }
+.grade-config .painel h2 { margin: 0 0 12px; font-size: 17px; }
+.dados { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 0 0 12px; font-size: 14px; }
+.dados dt { color: var(--mute); }
+.dados dd { margin: 0; font-weight: 550; overflow-wrap: anywhere; }
+.dados dd.bom { color: #1f9d55; } .dados dd.ruim { color: #d70015; }
+.pequeno { font-size: 13px; }
+@media (max-width: 640px) { .dados { grid-template-columns: 1fr; gap: 2px; } .dados dd { margin-bottom: 8px; } }

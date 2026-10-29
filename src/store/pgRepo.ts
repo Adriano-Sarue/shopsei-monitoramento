@@ -6,8 +6,8 @@ import type { Ocorrencia, Situacao } from '../incidents/queue.js';
 import { PortariaPg } from '../portaria/pg.js';
 import type { AlarmEvent } from '../protocols/types.js';
 import {
-  ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarCliente, validarEmpresa, validarUsuario,
-  type Cliente, type Empresa, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Rota, type UltimoEvento, type Usuario,
+  ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarAjustes, validarCliente, validarEmpresa, validarUsuario,
+  type Ajustes, type Cliente, type Empresa, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Rota, type UltimoEvento, type Usuario,
 } from './repositorio.js';
 
 const SCHEMA = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'db', 'schema.sql');
@@ -36,8 +36,9 @@ export class PgRepo implements Repositorio {
   private readonly pool: pg.Pool;
   readonly portaria: PortariaPg;
 
-  constructor(connectionString: string) {
-    this.pool = new pg.Pool({ connectionString, max: 5 });
+  // Endereço de um PostgreSQL ou um pool pronto (ex.: o banco local embutido).
+  constructor(conexao: string | pg.Pool) {
+    this.pool = typeof conexao === 'string' ? new pg.Pool({ connectionString: conexao, max: 5 }) : conexao;
     this.portaria = new PortariaPg(this.pool);
   }
 
@@ -64,11 +65,11 @@ export class PgRepo implements Repositorio {
 
   async listarEmpresas(): Promise<Empresa[]> {
     const { rows } = await this.pool.query(`
-      SELECT e.id, e.nome, e.ativo,
+      SELECT e.id, e.nome, e.ativo, e.ajustes,
         COALESCE((SELECT json_agg(json_build_object('canal', canal, 'receptora', receptora, 'linha', linha) ORDER BY canal, receptora, linha)
                   FROM rotas WHERE empresa_id = e.id), '[]') AS rotas
       FROM empresas e ORDER BY e.id`);
-    return rows.map((r) => ({ id: Number(r.id), nome: r.nome, ativo: r.ativo, rotas: r.rotas as Rota[] }));
+    return rows.map((r) => ({ id: Number(r.id), nome: r.nome, ativo: r.ativo, rotas: r.rotas as Rota[], ajustes: validarAjustes(r.ajustes) }));
   }
 
   private async gravarRotas(db: pg.PoolClient, empresaId: number, rotas: Rota[]): Promise<void> {
@@ -96,12 +97,13 @@ export class PgRepo implements Repositorio {
     return (await this.listarEmpresas()).find((e) => e.id === id)!;
   }
 
-  async atualizarEmpresa(id: number, m: { nome?: string; ativo?: boolean; rotas?: Rota[] }): Promise<Empresa> {
+  async atualizarEmpresa(id: number, m: { nome?: string; ativo?: boolean; rotas?: Rota[]; ajustes?: Ajustes }): Promise<Empresa> {
     const atual = (await this.listarEmpresas()).find((e) => e.id === id);
     if (!atual) throw new NaoEncontradoError(`Empresa ${id} não existe`);
     const v = validarEmpresa({ nome: m.nome ?? atual.nome, rotas: m.rotas ?? atual.rotas });
     await this.transacao(async (db) => {
-      await db.query('UPDATE empresas SET nome = $2, ativo = $3 WHERE id = $1', [id, v.nome, m.ativo ?? atual.ativo]);
+      const ajustes = m.ajustes ? validarAjustes(m.ajustes) : atual.ajustes;
+      await db.query('UPDATE empresas SET nome = $2, ativo = $3, ajustes = $4 WHERE id = $1', [id, v.nome, m.ativo ?? atual.ativo, JSON.stringify(ajustes)]);
       if (m.rotas) await this.gravarRotas(db, id, v.rotas);
     });
     return (await this.listarEmpresas()).find((e) => e.id === id)!;

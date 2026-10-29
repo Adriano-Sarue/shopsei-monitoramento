@@ -2,7 +2,8 @@ import { createApi, listen } from './api/server.js';
 import { randomBytes } from 'node:crypto';
 import { hashSenha } from './auth/senha.js';
 import { Sessoes } from './auth/sessoes.js';
-import { eventoInterno } from './incidents/planos.js';
+import { VigiaBase } from './incidents/base.js';
+import { CODIGO_BASE, CONTA_BASE, eventoInterno } from './incidents/planos.js';
 import { PortariaAoVivo } from './portaria/aoVivo.js';
 import { Cofre } from './portaria/cofre.js';
 import { Central, type Canal } from './central.js';
@@ -12,16 +13,20 @@ import { SurgardServer } from './receiver/surgardServer.js';
 import { JsonlStore } from './store/jsonlStore.js';
 import { MemoryRepo } from './store/memoryRepo.js';
 import { PgRepo } from './store/pgRepo.js';
-import type { Repositorio } from './store/repositorio.js';
+import { abrirBancoLocal } from './store/bancoLocal.js';
+import { AJUSTES_PADRAO, type Repositorio } from './store/repositorio.js';
 import type { AlarmEvent } from './protocols/types.js';
 
 const tcpPort = Number(process.env.RECEPTORA_TCP_PORTA ?? 9000);
 const udpPort = Number(process.env.RECEPTORA_UDP_PORTA ?? 9000);
 const accounts = AccountRegistry.fromFile(process.env.CONTAS_ARQUIVO ?? 'config/accounts.json');
 
-// Com DATABASE_URL usa PostgreSQL; sem ela roda em memória (nada sobrevive ao reinício).
-const repo: Repositorio = process.env.DATABASE_URL ? new PgRepo(process.env.DATABASE_URL) : new MemoryRepo();
-if (!process.env.DATABASE_URL) console.warn('DATABASE_URL não definida: rodando sem banco, fila e clientes somem ao reiniciar');
+// Com DATABASE_URL usa PostgreSQL; com BANCO_LOCAL (uma pasta), o PostgreSQL embutido, para testar num PC sem
+// instalar banco; sem nenhum dos dois roda em memória (nada sobrevive ao reinício).
+const repo: Repositorio = process.env.DATABASE_URL ? new PgRepo(process.env.DATABASE_URL)
+  : process.env.BANCO_LOCAL ? new PgRepo(await abrirBancoLocal(process.env.BANCO_LOCAL)) : new MemoryRepo();
+if (process.env.BANCO_LOCAL && !process.env.DATABASE_URL) console.log(`Banco local na pasta ${process.env.BANCO_LOCAL}`);
+if (!process.env.DATABASE_URL && !process.env.BANCO_LOCAL) console.warn('DATABASE_URL não definida: rodando sem banco, fila e clientes somem ao reiniciar');
 await repo.init();
 
 // Primeira subida: cria a empresa dona do servidor (a Shop Sei) com rotas coringa, para receber tudo que chegar.
@@ -41,10 +46,11 @@ let gravacao: Promise<unknown> = Promise.resolve();
 function gravar(fn: () => Promise<unknown>): void {
   gravacao = gravacao.then(fn).catch((err) => console.error('Falha ao gravar no banco:', err));
 }
-// Falha de energia costuma voltar sozinha: espera esse tempo em "pendente" antes de ir à fila (0 desliga).
-const esperaEnergiaMin = Number(process.env.FALHA_ENERGIA_ESPERA_MIN ?? 30);
+// Falha de energia costuma voltar sozinha: espera em "pendente" antes de ir à fila (0 desliga). O tempo vem da
+// tela Configurações de cada empresa; FALHA_ENERGIA_ESPERA_MIN vale para quem não mudou lá.
+const esperaEnergiaPadrao = Number(process.env.FALHA_ENERGIA_ESPERA_MIN ?? AJUSTES_PADRAO.esperaEnergiaMin);
 const central = new Central(repo, {
-  esperaMin: (e) => (e.code === '301' && e.qualifier !== 'restore' ? esperaEnergiaMin : 0),
+  esperaMin: (e, empresa) => (e.code === '301' && e.qualifier !== 'restore' ? empresa.ajustes.esperaEnergiaMin ?? esperaEnergiaPadrao : 0),
   onChange: (o) => gravar(() => repo.salvarOcorrencia(o)),
 });
 await central.iniciar();
@@ -118,11 +124,45 @@ await aoVivo.recarregar();
 aoVivo.iniciar(Number(process.env.PORTARIA_INTERVALO_MS ?? 2000));
 setInterval(() => void aoVivo.recarregar().catch((err) => console.error('Falha ao recarregar equipamentos:', err)), 60_000).unref();
 
+// Internet da base: o feed do Active Net precisa estar chegando pela ponte. Sem sinal por BASE_SEM_SINAL_SEG
+// (padrão 120 s; a ponte manda batimento a cada 30 s), abre um aviso urgente nas empresas que recebem o feed.
+const vigiaBase = surgard ? new VigiaBase(Number(process.env.BASE_SEM_SINAL_SEG ?? 120)) : undefined;
+function avisarBase(situacao: 'caiu' | 'voltou'): void {
+  const agora = new Date();
+  for (const e of central.listaEmpresas().filter((x) => x.ativo && x.rotas.some((r) => r.canal === 'surgard'))) {
+    const ev = situacao === 'caiu'
+      ? eventoInterno(CONTA_BASE, CODIGO_BASE, 'Base sem sinal: internet da empresa ou ponte do Active Net fora do ar', agora, { priority: 2 })
+      : eventoInterno(CONTA_BASE, CODIGO_BASE, 'Sinal da base voltou', agora, { qualifier: 'restore', priority: 5 });
+    ev.empresaId = e.id;
+    onEvent(ev, 'dc09');
+  }
+  console.warn(situacao === 'caiu' ? 'Base sem sinal: o feed do Active Net parou de chegar' : 'Sinal da base voltou');
+}
+if (vigiaBase && surgard) {
+  const s = surgard;
+  setInterval(() => { const r = vigiaBase.verificar({ conexoes: s.conexoes, ultimoSinal: s.ultimoSinal }); if (r) avisarBase(r); }, 5_000).unref();
+}
+
+// Gerador de eventos de teste (tela Configurações): passa pelo mesmo caminho dos eventos reais.
+function simular(empresaId: number, e: AlarmEvent): void {
+  e.empresaId = empresaId;
+  onEvent(e, 'dc09');
+}
+
 const sessoes = new Sessoes();
 const api = createApi(central, {
   token: process.env.CONSOLE_TOKEN, tokenEmpresa: empresaPrincipal.id, sessoes, publicDir: 'public', port: 0, repo,
   ultimoEvento: (empresaId) => ultimoEvento.get(empresaId),
   aoVivo, cofre, urlEventos: process.env.PORTARIA_URL_EVENTOS,
+  simular,
+  recepcao: () => ({
+    banco: process.env.DATABASE_URL ? 'PostgreSQL' : process.env.BANCO_LOCAL ? 'Banco local (pasta ' + process.env.BANCO_LOCAL + ')' : 'Memória (sem banco)',
+    surgard: surgard ? {
+      porta: Number(process.env.SURGARD_PORTA_PUBLICA ?? process.env.SURGARD_TCP_PORTA), conexoes: surgard.conexoes,
+      ultimoSinal: surgard.ultimoSinal?.toISOString() ?? null, semSinal: vigiaBase?.semSinal ?? false, limiteSeg: Number(process.env.BASE_SEM_SINAL_SEG ?? 120),
+    } : null,
+    dc09: { porta: tcpPort },
+  }),
 });
 console.log(`Console web ouvindo na porta ${await listen(api, Number(process.env.CONSOLE_PORTA ?? 8090))}`);
 setInterval(() => {
@@ -141,7 +181,7 @@ setInterval(() => {
   for (const e of central.listaEmpresas()) {
     const contas = [...new Set(central.clientes(e.id).todos().flatMap((c) => c.contas))];
     for (const { conta, desde, horas } of central.supervisao(e.id).atrasadas(contas)) {
-      const ev = eventoInterno(conta, 'TST', `Falta de teste periódico: nenhum sinal há mais de ${horas} h (desde ${desde.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })})`, new Date());
+      const ev = eventoInterno(conta, 'TST', `Central sem comunicação: nenhum teste periódico há mais de ${horas} h (desde ${desde.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })})`, new Date());
       ev.empresaId = e.id;
       onEvent(ev, 'dc09');
     }

@@ -73,7 +73,7 @@ function card(o, nova) {
   const p = Math.min(o.prioridade, 4);
   const c = el('div', 'cartao ocorrencia p' + p + (nova ? ' nova' : '') + (o.alarme && o.situacao !== 'pendente' ? ' disparo' : ''));
   const l1 = el('div', 'linha');
-  l1.append(el('span', 'titulo', 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '')), el('span', 'selo p' + p, NIVEIS[p]));
+  l1.append(el('span', 'titulo', rotuloConta(o)), el('span', 'selo p' + p, NIVEIS[p]));
   c.append(l1);
   const l2 = el('div', 'linha'); l2.append(el('span', '', o.resumo), el('span', 'mute', haQuanto(o.abertaEm))); c.append(l2);
   if (!o.contaCadastrada) c.append(el('div', 'aviso', 'Conta não cadastrada'));
@@ -148,7 +148,7 @@ function card(o, nova) {
   if (o.situacao === 'em_atendimento' && o.operador === eu.nome) {
     const a = el('div', 'acoes');
     const concluir = el('button', 'principal', 'Concluir');
-    concluir.onclick = () => { concluindo = o; $('dlg-resumo').textContent = 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '') + ' · ' + o.resumo; $('motivo').value = ''; $('conclusao').value = ''; $('dlg-erro').textContent = ''; $('dlg-concluir').showModal(); $('motivo').focus(); };
+    concluir.onclick = () => { concluindo = o; $('dlg-resumo').textContent = rotuloConta(o) + ' · ' + o.resumo; $('motivo').value = ''; $('conclusao').value = ''; $('dlg-erro').textContent = ''; $('dlg-concluir').showModal(); $('motivo').focus(); };
     const adiar = el('select'); adiar.style.width = 'auto';
     adiar.append(new Option('Adiar…', ''), new Option('15 minutos', '15'), new Option('30 minutos', '30'), new Option('1 hora', '60'));
     adiar.onchange = async () => {
@@ -166,7 +166,8 @@ function mostrarFeed(st) {
   const base = new Date(st.ultimoEventoEm || st.iniciadoEm).getTime();
   const min = Math.floor((new Date(st.agora).getTime() - base) / 60000);
   const ruim = min >= LIMITE_SILENCIO_MIN;
-  f.className = 'feed' + (ruim ? ' ruim' : '');
+  f.className = 'feed' + (ruim || (st.base && st.base.semSinal) ? ' ruim' : '');
+  if (st.base && st.base.semSinal) { f.textContent = '⚠ Base sem sinal: confira a internet e a ponte do Active Net'; return; }
   f.textContent = st.ultimoEventoEm
     ? (ruim ? '⚠ Sem eventos há ' + min + ' min. Confira o Active Net' : 'Último evento ' + haQuanto(st.ultimoEventoEm))
     : (ruim ? '⚠ Nenhum evento desde que o sistema iniciou (' + min + ' min)' : 'Aguardando eventos…');

@@ -57,6 +57,35 @@ export interface Empresa {
   nome: string;
   ativo: boolean;
   rotas: Rota[];
+  ajustes: Ajustes;
+}
+
+// Regras da fila que o administrador muda na tela Configurações. Campo ausente = valor padrão.
+export interface Ajustes {
+  // Quantos chamados um operador atende ao mesmo tempo.
+  limitePorOperador?: number;
+  // Minutos que uma falha de energia espera em "pendente" antes de ir à fila (0 = vai direto).
+  esperaEnergiaMin?: number;
+}
+
+export const AJUSTES_PADRAO: Required<Ajustes> = { limitePorOperador: 3, esperaEnergiaMin: 30 };
+
+const FAIXAS: Record<keyof Ajustes, [number, number, string]> = {
+  limitePorOperador: [1, 10, 'Chamados por operador'],
+  esperaEnergiaMin: [0, 240, 'Espera da falha de energia'],
+};
+
+export function validarAjustes(v: unknown): Ajustes {
+  const entrada = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  const out: Ajustes = {};
+  for (const [chave, [min, max, rotulo]] of Object.entries(FAIXAS) as [keyof Ajustes, [number, number, string]][]) {
+    const x = entrada[chave];
+    if (x === undefined || x === null || x === '') continue;
+    const n = Number(x);
+    if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${rotulo}: use um número inteiro de ${min} a ${max}`);
+    out[chave] = n;
+  }
+  return out;
 }
 
 export function normalizarNumero(v: string | undefined): string {
@@ -131,7 +160,7 @@ export interface Repositorio {
   readonly portaria: RepoPortaria;
   listarEmpresas(): Promise<Empresa[]>;
   criarEmpresa(e: { nome: string; rotas?: Rota[] }): Promise<Empresa>;
-  atualizarEmpresa(id: number, m: { nome?: string; ativo?: boolean; rotas?: Rota[] }): Promise<Empresa>;
+  atualizarEmpresa(id: number, m: { nome?: string; ativo?: boolean; rotas?: Rota[]; ajustes?: Ajustes }): Promise<Empresa>;
   // Evento sem empresa (nenhuma rota casou) também é gravado, com empresaId vazio.
   salvarEvento(e: AlarmEvent): Promise<void>;
   salvarOcorrencia(o: Ocorrencia): Promise<void>;

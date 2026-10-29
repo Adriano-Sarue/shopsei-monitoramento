@@ -108,7 +108,7 @@ test('normalização: NULL vira supervisão e protocolo desconhecido não se per
 });
 
 test('Contact ID: textos usados na Shop Sei (250, 301, 360, 602)', () => {
-  assert.equal(parseContactId('1250 00 000').description, 'Falha de keep alive');
+  assert.equal(parseContactId('1250 00 000').description, 'Central sem comunicação (falha de keep alive)');
   assert.equal(parseContactId('1250 00 000').category, 'fault');
   assert.equal(parseContactId('1301 00 000').description, 'Falha AC');
   assert.equal(parseContactId('3301 00 000').description, 'Restauração: Falha AC');

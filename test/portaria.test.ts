@@ -6,6 +6,10 @@ import { Central } from '../src/central.js';
 import { PortariaMemoria } from '../src/portaria/memoria.js';
 import { lerImportacao, pessoaValida, UnidadeDuplicadaError, type RepoPortaria } from '../src/portaria/tipos.js';
 import { MemoryRepo } from '../src/store/memoryRepo.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { abrirBancoLocal } from '../src/store/bancoLocal.js';
 import { PgRepo } from '../src/store/pgRepo.js';
 import { NaoEncontradoError, type Repositorio } from '../src/store/repositorio.js';
 
@@ -205,5 +209,19 @@ test('API da portaria: administrador cadastra e importa, operador atende, outra 
     assert.equal((await fetch(`${base}/condominios.html`, { headers: adm })).status, 200);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test('portaria no banco local embutido cumpre o contrato', async () => {
+  const pasta = await mkdtemp(join(tmpdir(), 'shopsei-banco-'));
+  const repo: Repositorio = new PgRepo(await abrirBancoLocal(pasta));
+  try {
+    await repo.init();
+    const a = await repo.criarEmpresa({ nome: 'A' });
+    const b = await repo.criarEmpresa({ nome: 'B' });
+    await contrato(repo.portaria, a.id, b.id);
+  } finally {
+    await repo.fechar();
+    await rm(pasta, { recursive: true, force: true });
   }
 });

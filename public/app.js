@@ -47,7 +47,7 @@ async function iniciarTopo(ativa) {
   const links = eu.plataforma
     ? [['/empresas.html', 'Empresas', 'empresas'], ['/usuarios.html', 'Donos do sistema', 'usuarios']]
     : [['/', 'Fila', 'fila'], ['/portaria.html', 'Portaria', 'portaria'], ['/historico.html', 'Histórico', 'historico']];
-  if (!eu.plataforma && eu.papel === 'admin') links.push(['/clientes.html', 'Clientes', 'clientes'], ['/condominios.html', 'Condomínios', 'condominios'], ['/usuarios.html', 'Usuários', 'usuarios']);
+  if (!eu.plataforma && eu.papel === 'admin') links.push(['/clientes.html', 'Clientes', 'clientes'], ['/condominios.html', 'Condomínios', 'condominios'], ['/usuarios.html', 'Usuários', 'usuarios'], ['/configuracoes.html', 'Configurações', 'configuracoes']);
   for (const [href, texto, chave] of links) { const a = el('a', chave === ativa ? 'ativo' : '', texto); a.href = href; nav.append(a); }
   const quem = el('div', 'usuario');
   const papel = eu.plataforma ? 'Plataforma' : eu.papel === 'admin' ? 'Administrador' : 'Operador';
@@ -121,6 +121,10 @@ function abrirCamera(cam, n = 0) {
   return !!jan;
 }
 
+// Aviso da própria base (internet da empresa ou ponte do Active Net), não de um cliente.
+const CONTA_BASE = 'BASE';
+function rotuloConta(o) { return o.conta === CONTA_BASE ? 'Base da empresa' : 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : ''); }
+
 function tipoDisparo(o) { return /p[aâ]nico|coa[cç][aã]o/i.test(o.resumo) ? '🆘 PÂNICO' : '🚨 DISPARO'; }
 
 function botoesAlarme(ativos, aoCiente, aoFicarDisponivel) {
@@ -160,7 +164,8 @@ function popupAlarme(ativos, aoCiente, aoFicarDisponivel) {
   const topo = el('div', 'alarme-popup-topo');
   topo.append(el('strong', '', tipoDisparo(o)), el('span', '', haQuanto(o.abertaEm)));
   const corpo = el('div', 'alarme-popup-corpo');
-  corpo.append(el('div', 'alarme-popup-cliente', o.cliente ? o.cliente.nome : 'Conta não cadastrada'), el('div', 'alarme-popup-conta', 'Conta ' + o.conta + (o.cliente && o.cliente.tipo ? ' · ' + o.cliente.tipo : '')));
+  if (o.conta === CONTA_BASE) corpo.append(el('div', 'alarme-popup-cliente', 'Base da empresa'), el('div', 'alarme-popup-conta', 'Internet da base ou ponte do Active Net'));
+  else corpo.append(el('div', 'alarme-popup-cliente', o.cliente ? o.cliente.nome : 'Conta não cadastrada'), el('div', 'alarme-popup-conta', 'Conta ' + o.conta + (o.cliente && o.cliente.tipo ? ' · ' + o.cliente.tipo : '')));
   if (o.cliente && o.cliente.endereco) corpo.append(el('div', 'mute', o.cliente.endereco));
   corpo.append(el('div', 'alarme-popup-evento', o.resumo));
   const cams = (o.cliente && o.cliente.cameras) || [];
@@ -169,7 +174,7 @@ function popupAlarme(ativos, aoCiente, aoFicarDisponivel) {
     cams.forEach((cam, i) => { const b = el('button', 'mini', '📹 ' + cam.nome); b.type = 'button'; b.onclick = () => abrirCamera(cam, i); lista.append(b); });
     corpo.append(lista);
   }
-  if (ativos.length > 1) corpo.append(el('div', 'aviso', 'Mais ' + (ativos.length - 1) + (ativos.length > 2 ? ' disparos' : ' disparo') + ' na fila'));
+  if (ativos.length > 1) corpo.append(el('div', 'aviso', 'Mais ' + (ativos.length - 1) + (ativos.length > 2 ? ' alarmes' : ' alarme') + ' na fila'));
   const botoes = el('div', 'alarme-botoes');
   const min = el('button', 'discreto', 'Minimizar'); min.type = 'button'; min.onclick = minimizar;
   botoes.append(...botoesAlarme([o, ...ativos.filter((x) => x !== o)], aoCiente, aoFicarDisponivel), min);
@@ -198,8 +203,8 @@ function atualizarAlarme(lista, eu, aoCiente, aoFicarDisponivel) {
   if (!alarme.faixa) { alarme.faixa = el('div', 'alarme-faixa'); alarme.faixa.setAttribute('role', 'alert'); document.querySelector('.topo').after(alarme.faixa); }
   const o = ativos[0];
   const texto = el('div', 'alarme-texto');
-  texto.append(el('strong', '', ativos.length > 1 ? '🚨 ' + ativos.length + ' DISPAROS' : tipoDisparo(o)),
-    el('span', '', 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '') + ' · ' + o.resumo + ' · ' + haQuanto(o.abertaEm)));
+  texto.append(el('strong', '', ativos.length > 1 ? '🚨 ' + ativos.length + ' ALARMES' : tipoDisparo(o)),
+    el('span', '', rotuloConta(o) + ' · ' + o.resumo + ' · ' + haQuanto(o.abertaEm)));
   const botoes = el('div', 'alarme-botoes');
   botoes.append(...botoesAlarme(ativos, aoCiente, aoFicarDisponivel));
   alarme.faixa.replaceChildren(texto, botoes);

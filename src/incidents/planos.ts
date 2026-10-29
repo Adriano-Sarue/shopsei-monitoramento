@@ -67,9 +67,20 @@ const PLANOS: { quando: (e: AlarmEvent) => boolean; passos: string[] }[] = [
     ],
   },
   {
+    quando: (e) => e.code === CODIGO_BASE,
+    passos: [
+      'Base sem sinal: os eventos das centrais podem não estar chegando ao sistema',
+      'Conferir a internet da base (modem e roteador) e se o PC do Active Net está ligado',
+      'Conferir se a ponte do Active Net está aberta no PC (janela "Ponte Shop Sei")',
+      'Enquanto não voltar, acompanhar os eventos direto no Active Net',
+      'Registrar o desfecho quando o sinal voltar',
+    ],
+  },
+  {
     quando: (e) => ['250', '350', '351', '354', 'TST'].includes(e.code),
     passos: [
-      'Ver se outras contas também pararam (pode ser o Active Net ou a internet da central)',
+      'Central do cliente sem comunicação: pode ser falta de internet, de chip ou de energia no local',
+      'Ver se outras contas também pararam (se pararam todas, o problema é na base ou no Active Net)',
       'Ligar para o cliente e informar a falha',
       'Persistindo: abrir ordem de serviço para o técnico',
       'Registrar o desfecho',
@@ -113,9 +124,13 @@ export function planoPara(o: Ocorrencia, contaCadastrada: boolean): string[] {
 }
 
 // Evento gerado pelo próprio sistema (ex.: falta de teste periódico), no mesmo formato dos que chegam das centrais.
-export function eventoInterno(conta: string, code: string, description: string, agora: Date): AlarmEvent {
+export function eventoInterno(conta: string, code: string, description: string, agora: Date, extra: Partial<Pick<AlarmEvent, 'priority' | 'qualifier'>> = {}): AlarmEvent {
   return {
     receivedAt: agora.toISOString(), transport: 'tcp', remote: 'sistema', protocol: 'INTERNO', account: conta, line: '0',
-    sequence: '0000', encrypted: false, code, qualifier: 'new', description, category: 'fault', priority: 3, raw: '',
+    sequence: '0000', encrypted: false, code, qualifier: 'new', description, category: 'fault', priority: 3, raw: '', ...extra,
   };
 }
+
+// Conta e código dos avisos de internet da base (o feed do Active Net parou de chegar ao servidor).
+export const CONTA_BASE = 'BASE';
+export const CODIGO_BASE = 'BAS';

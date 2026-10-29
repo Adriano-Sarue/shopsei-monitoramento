@@ -317,3 +317,62 @@ test('troca de turno: quem entra digita só a senha e recebe os chamados', async
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+test('configurações: administrador muda as regras da fila e gera eventos de teste', async () => {
+  const repo = new MemoryRepo();
+  const { id: eid } = await repo.criarEmpresa({ nome: 'Shop Sei', rotas: [{ canal: 'dc09', receptora: '*', linha: '*' }] });
+  await repo.criarUsuario({ empresaId: eid, login: 'adm', nome: 'Adm', papel: 'admin', senhaHash: await hashSenha('senha-adm-1') });
+  await repo.criarUsuario({ empresaId: eid, login: 'ana', nome: 'Ana', papel: 'operador', senhaHash: await hashSenha('senha-ana-1') });
+  const central = new Central(repo);
+  await central.iniciar();
+  const simulados: AlarmEvent[] = [];
+  const server = createApi(central, {
+    publicDir: 'public', port: 0, repo,
+    simular: (empresaId, e) => { simulados.push(e); central.fila(empresaId).handleEvent(e); },
+    recepcao: () => ({ banco: 'Memória', surgard: { porta: 9200, conexoes: 1, ultimoSinal: null, semSinal: true, limiteSeg: 120 }, dc09: { porta: 9000 } }),
+  });
+  const base = `http://127.0.0.1:${await listen(server, 0, '127.0.0.1')}`;
+  const json = { 'content-type': 'application/json' };
+  const entrar = async (login: string, senha: string) => ({ ...json, cookie: ((await fetch(`${base}/api/login`, { method: 'POST', headers: json, body: JSON.stringify({ login, senha }) })).headers.get('set-cookie') ?? '').split(';')[0]! });
+  try {
+    const adm = await entrar('adm', 'senha-adm-1');
+    const ana = await entrar('ana', 'senha-ana-1');
+    // Operador não vê nem muda configurações.
+    assert.equal((await fetch(`${base}/api/configuracoes`, { headers: ana })).status, 403);
+    assert.equal((await fetch(`${base}/configuracoes.html`, { headers: ana, redirect: 'manual' })).status, 302);
+    assert.equal((await fetch(`${base}/configuracoes.html`, { headers: adm })).status, 200);
+    const c = await (await fetch(`${base}/api/configuracoes`, { headers: adm })).json() as { ajustes: { limitePorOperador: number; esperaEnergiaMin: number }; versao: string; recepcao: { surgard: { porta: number } } };
+    assert.deepEqual(c.ajustes, { limitePorOperador: 3, esperaEnergiaMin: 30 });
+    assert.equal(c.recepcao.surgard.porta, 9200);
+    assert.match(c.versao, /^\d+\.\d+\.\d+/);
+    // A Fila também fica sabendo que a base está sem sinal.
+    assert.deepEqual(((await (await fetch(`${base}/api/estado`, { headers: ana })).json()) as { base: unknown }).base, { semSinal: true, conexoes: 1 });
+
+    const put = (b: unknown) => fetch(`${base}/api/configuracoes`, { method: 'PUT', headers: adm, body: JSON.stringify(b) });
+    assert.equal((await put({ limitePorOperador: 0 })).status, 400);
+    assert.equal((await put({ esperaEnergiaMin: 9999 })).status, 400);
+    assert.equal((await put({ limitePorOperador: 1, esperaEnergiaMin: 0 })).status, 200);
+    assert.deepEqual((await repo.listarEmpresas())[0]!.ajustes, { limitePorOperador: 1, esperaEnergiaMin: 0 });
+
+    // Com limite 1, a Ana pega um chamado por vez.
+    await fetch(`${base}/api/operadores`, { method: 'POST', headers: ana, body: JSON.stringify({ disponivel: true }) });
+    const teste = (b: unknown) => fetch(`${base}/api/configuracoes/teste`, { method: 'POST', headers: adm, body: JSON.stringify(b) });
+    assert.equal((await teste({ conta: '0043', tipo: 'nada' })).status, 400);
+    assert.equal((await teste({ conta: '', tipo: 'disparo' })).status, 400);
+    assert.equal((await fetch(`${base}/api/configuracoes/teste`, { method: 'POST', headers: ana, body: JSON.stringify({ conta: '0043', tipo: 'disparo' }) })).status, 403);
+    const r = await teste({ conta: '0043', tipo: 'disparo' });
+    assert.equal(r.status, 200);
+    assert.equal(((await r.json()) as { descricao: string }).descricao, 'Disparo de alarme (teste)');
+    assert.equal((await teste({ conta: '0051', tipo: 'sem_internet' })).status, 200);
+    assert.equal(simulados[0]!.protocol, 'INTERNO');
+    const lista = central.fila(eid).list();
+    assert.equal(lista.length, 2);
+    assert.equal(lista.filter((o) => o.operador === 'Ana').length, 1);
+    assert.equal(lista.find((o) => o.conta === '0051')!.eventos[0]!.description, 'Central sem comunicação (falha de comunicação) (teste)');
+    // Energia vai direto para a fila com espera 0.
+    assert.equal((await teste({ conta: '0062', tipo: 'energia' })).status, 200);
+    assert.equal(central.fila(eid).list().find((o) => o.conta === '0062')!.situacao, 'aguardando');
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
