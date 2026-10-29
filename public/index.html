@@ -55,11 +55,11 @@ function bip() {
 
 function aviso(texto) { $('erro').textContent = texto; }
 
-// "Ciente" no disparo: já abre a primeira câmera do cliente numa aba nova (precisa ser no clique, senão o navegador
-// bloqueia a janela); as outras ficam nos botões do cartão.
+// "Ciente" no disparo: já abre a primeira câmera do cliente numa janela pop-up (precisa ser no clique, senão o
+// navegador bloqueia a janela); as outras ficam nos botões do pop-up e do cartão.
 function cienteDoDisparo(o) {
   const cam = o.cliente && o.cliente.cameras && o.cliente.cameras[0];
-  if (cam) window.open(cam.url, '_blank', 'noopener');
+  if (cam) abrirCamera(cam, 0);
   return anotar(o, 'Ciente do disparo, iniciando atendimento' + (cam ? ' (câmera ' + cam.nome + ' aberta)' : ''));
 }
 const rascunhos = {};
@@ -81,7 +81,7 @@ function card(o, nova) {
     if (o.cliente.palavraChave || o.cliente.contraSenha) c.append(el('div', 'chaves', 'Palavra-chave: ' + (o.cliente.palavraChave || '-') + '  ·  Contra-senha: ' + (o.cliente.contraSenha || '-')));
     if (o.cliente.cameras && o.cliente.cameras.length) {
       const cams = el('div', 'cameras');
-      for (const cam of o.cliente.cameras) { const a = el('a', '', '📹 ' + cam.nome + (cam.marca ? ' · ' + cam.marca : '')); a.href = cam.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; cams.append(a); }
+      o.cliente.cameras.forEach((cam, i) => { const a = el('a', '', '📹 ' + cam.nome + (cam.marca ? ' · ' + cam.marca : '')); a.href = cam.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.onclick = (ev) => { if (abrirCamera(cam, i)) ev.preventDefault(); }; cams.append(a); });
       c.append(cams);
     }
     if (o.cliente.instrucoes) { const ins = el('div', 'instrucoes'); ins.append(el('strong', '', 'Instruções do cliente: '), document.createTextNode(o.cliente.instrucoes)); c.append(ins); }

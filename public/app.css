@@ -272,8 +272,25 @@ body.em-alarme::after { content: ""; position: fixed; inset: 0; pointer-events: 
 @keyframes borda-alarme { 50% { opacity: 0; } }
 .ocorrencia.disparo { border: 2px solid #ff2d46; animation: cartao-alarme 1s steps(1) infinite; }
 @keyframes cartao-alarme { 0% { background: var(--card); } 50% { background: color-mix(in srgb, #ff2d46 16%, var(--card)); } }
+/* Pop-up do disparo/pânico no meio da tela: topo vermelho piscando, dados do cliente e as câmeras */
+dialog.alarme-popup { width: min(520px, calc(100vw - 24px)); padding: 0; overflow: hidden; border: 2px solid #ff2d46; box-shadow: 0 0 0 6px rgba(255, 45, 70, .25), 0 30px 80px rgba(200, 16, 46, .45); }
+dialog.alarme-popup::backdrop { background: rgba(120, 0, 20, .38); }
+.alarme-popup-topo { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 16px 22px; color: #fff; background: #c8102e; animation: faixa-alarme 1s steps(1) infinite; }
+.alarme-popup-topo strong { font-size: 26px; font-weight: 800; letter-spacing: .03em; }
+.alarme-popup-topo span { font-weight: 600; opacity: .9; }
+.alarme-popup-corpo { display: grid; gap: 6px; padding: 18px 22px 6px; }
+.alarme-popup-cliente { font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+.alarme-popup-conta { font-weight: 600; color: var(--mute); }
+.alarme-popup-evento { margin-top: 6px; padding: 10px 14px; border-radius: 14px; font-size: 17px; font-weight: 700; color: #b00d27; background: color-mix(in srgb, #ff2d46 12%, transparent); }
+.alarme-popup .cameras button { padding: 7px 14px; font-size: 13px; }
+.alarme-popup .alarme-botoes { justify-content: flex-end; padding: 14px 22px 20px; }
+.alarme-popup .alarme-botoes button, .alarme-popup .alarme-botoes .botao { background: #c8102e; color: #fff; }
+.alarme-popup .alarme-botoes .forte { box-shadow: 0 0 0 4px rgba(255, 45, 70, .3), 0 6px 18px rgba(200, 16, 46, .35); }
+.alarme-popup .alarme-botoes .discreto { background: var(--campo); color: var(--ink); box-shadow: none; }
+.alarme-popup .alarme-botoes span { color: var(--mute); }
+@media (prefers-color-scheme: dark) { .alarme-popup-evento { color: #ff8b98; } }
 @media (max-width: 640px) { .alarme-faixa { top: 70px; margin: 8px 8px 0; padding: 10px 12px 10px 16px; } .alarme-texto { font-size: 14px; } .alarme-texto strong { font-size: 16px; } }
-@media (prefers-reduced-motion: reduce) { .alarme-faixa, body.em-alarme::after, .ocorrencia.disparo { animation: none; } button { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .alarme-faixa, .alarme-popup-topo, body.em-alarme::after, .ocorrencia.disparo { animation: none; } button { transition: none; } }
 
 /* Navegadores sem desfoque: painéis opacos para manter a leitura */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {

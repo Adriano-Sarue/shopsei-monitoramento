@@ -72,9 +72,9 @@ async function iniciarTopo(ativa) {
   return eu;
 }
 
-// Alarme de disparo: faixa vermelha piscando e sirene até um operador ficar ciente. Toca enquanto houver disparo
+// Alarme de disparo: pop-up, faixa vermelha piscando e sirene até um operador ficar ciente. Toca enquanto houver disparo
 // esperando operador, ou disparo entregue a você que você ainda não marcou como ciente.
-const alarme = { ctx: null, nos: null, faixa: null, titulo: document.title, pisca: null, avisadas: new Set() };
+const alarme = { ctx: null, nos: null, faixa: null, titulo: document.title, pisca: null, avisadas: new Set(), popup: null, chave: '', minimizadas: new Set() };
 
 function sirene(ligar) {
   if (!ligar) {
@@ -104,10 +104,77 @@ function emAlarme(lista, eu) {
     || (o.situacao === 'em_atendimento' && o.operador === eu.nome && !o.acoes.some((a) => a.operador === eu.nome))));
 }
 
+// Câmera do cliente numa janela pop-up própria (separada do sistema), ao lado da janela principal.
+// Só abre dentro de um clique: fora dele o navegador bloqueia a janela.
+function abrirCamera(cam, n = 0) {
+  const w = Math.min(960, screen.availWidth - 40), h = Math.min(600, screen.availHeight - 80);
+  const x = Math.max(0, (window.screenX || 0) + (window.outerWidth || w) - w - 20 - n * 30), y = Math.max(0, (window.screenY || 0) + 80 + n * 30);
+  const jan = window.open(cam.url, 'camera-' + n, 'popup=yes,width=' + w + ',height=' + h + ',left=' + x + ',top=' + y);
+  if (jan) { try { jan.opener = null; jan.focus(); } catch { /* outra origem */ } }
+  return !!jan;
+}
+
+function tipoDisparo(o) { return /p[aâ]nico|coa[cç][aã]o/i.test(o.resumo) ? '🆘 PÂNICO' : '🚨 DISPARO'; }
+
+function botoesAlarme(ativos, aoCiente, aoFicarDisponivel) {
+  const botoes = [];
+  if (alarme.ctx && alarme.ctx.state !== 'running') {
+    const som = el('button', '', '🔊 Ligar o som do alarme'); som.onclick = () => alarme.ctx.resume().catch(() => {}); botoes.push(som);
+  }
+  const meu = ativos.find((x) => x.situacao === 'em_atendimento');
+  if (meu && aoCiente) {
+    const ciente = el('button', 'forte', 'Ciente, estou atendendo a conta ' + meu.conta);
+    ciente.onclick = () => aoCiente(meu); botoes.push(ciente);
+  } else if (!aoCiente) {
+    const ir = el('a', 'botao forte', 'Ir para a fila'); ir.href = '/'; botoes.push(ir);
+  } else if (aoFicarDisponivel) {
+    const disp = el('button', 'forte', 'Ficar disponível e atender'); disp.onclick = aoFicarDisponivel; botoes.push(disp);
+  } else {
+    botoes.push(el('span', '', 'Esperando um operador disponível'));
+  }
+  return botoes;
+}
+
+// Pop-up no meio da tela com o disparo ou pânico. Some no "Ciente"; "Minimizar" deixa só a faixa e a sirene,
+// e o pop-up volta se chegar outro disparo.
+function popupAlarme(ativos, aoCiente, aoFicarDisponivel) {
+  const novos = ativos.filter((o) => !alarme.minimizadas.has(o.id));
+  if (!novos.length) { if (alarme.popup) { alarme.popup.close(); alarme.popup.remove(); alarme.popup = null; alarme.chave = ''; } return; }
+  const o = novos.find((x) => x.situacao === 'em_atendimento') || novos[0];
+  const chave = ativos.map((x) => x.id + x.situacao).join() + '|' + o.id + '|' + (alarme.ctx ? alarme.ctx.state : '');
+  if (alarme.popup && alarme.chave === chave) return;
+  alarme.chave = chave;
+  if (!alarme.popup) {
+    alarme.popup = el('dialog', 'alarme-popup'); alarme.popup.setAttribute('role', 'alertdialog');
+    alarme.popup.addEventListener('cancel', (ev) => { ev.preventDefault(); minimizar(); });
+    document.body.append(alarme.popup);
+  }
+  function minimizar() { for (const x of ativos) alarme.minimizadas.add(x.id); alarme.popup.close(); alarme.popup.remove(); alarme.popup = null; alarme.chave = ''; }
+  const topo = el('div', 'alarme-popup-topo');
+  topo.append(el('strong', '', tipoDisparo(o)), el('span', '', haQuanto(o.abertaEm)));
+  const corpo = el('div', 'alarme-popup-corpo');
+  corpo.append(el('div', 'alarme-popup-cliente', o.cliente ? o.cliente.nome : 'Conta não cadastrada'), el('div', 'alarme-popup-conta', 'Conta ' + o.conta + (o.cliente && o.cliente.tipo ? ' · ' + o.cliente.tipo : '')));
+  if (o.cliente && o.cliente.endereco) corpo.append(el('div', 'mute', o.cliente.endereco));
+  corpo.append(el('div', 'alarme-popup-evento', o.resumo));
+  const cams = (o.cliente && o.cliente.cameras) || [];
+  if (cams.length) {
+    const lista = el('div', 'cameras');
+    cams.forEach((cam, i) => { const b = el('button', 'mini', '📹 ' + cam.nome); b.type = 'button'; b.onclick = () => abrirCamera(cam, i); lista.append(b); });
+    corpo.append(lista);
+  }
+  if (ativos.length > 1) corpo.append(el('div', 'aviso', 'Mais ' + (ativos.length - 1) + (ativos.length > 2 ? ' disparos' : ' disparo') + ' na fila'));
+  const botoes = el('div', 'alarme-botoes');
+  const min = el('button', 'discreto', 'Minimizar'); min.type = 'button'; min.onclick = minimizar;
+  botoes.append(...botoesAlarme([o, ...ativos.filter((x) => x !== o)], aoCiente, aoFicarDisponivel), min);
+  alarme.popup.replaceChildren(topo, corpo, botoes);
+  if (!alarme.popup.open) { try { alarme.popup.showModal(); } catch { alarme.popup.show(); } }
+}
+
 function atualizarAlarme(lista, eu, aoCiente, aoFicarDisponivel) {
   const ativos = emAlarme(lista, eu).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));
   document.body.classList.toggle('em-alarme', ativos.length > 0);
   sirene(ativos.length > 0);
+  popupAlarme(ativos, aoCiente, aoFicarDisponivel);
   if (!ativos.length) {
     if (alarme.faixa) { alarme.faixa.remove(); alarme.faixa = null; }
     if (alarme.pisca) { clearInterval(alarme.pisca); alarme.pisca = null; document.title = alarme.titulo; }
@@ -118,29 +185,16 @@ function atualizarAlarme(lista, eu, aoCiente, aoFicarDisponivel) {
     if (alarme.avisadas.has(o.id)) continue;
     alarme.avisadas.add(o.id);
     if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-      try { new Notification('🚨 Disparo · Conta ' + o.conta, { body: (o.cliente ? o.cliente.nome + ' · ' : '') + o.resumo, tag: 'ocorrencia-' + o.id, requireInteraction: true }); } catch { /* sem notificação */ }
+      try { new Notification(tipoDisparo(o) + ' · Conta ' + o.conta, { body: (o.cliente ? o.cliente.nome + ' · ' : '') + o.resumo, tag: 'ocorrencia-' + o.id, requireInteraction: true }); } catch { /* sem notificação */ }
     }
   }
   if (!alarme.faixa) { alarme.faixa = el('div', 'alarme-faixa'); alarme.faixa.setAttribute('role', 'alert'); document.querySelector('.topo').after(alarme.faixa); }
   const o = ativos[0];
   const texto = el('div', 'alarme-texto');
-  texto.append(el('strong', '', ativos.length > 1 ? '🚨 ' + ativos.length + ' DISPAROS' : '🚨 DISPARO'),
+  texto.append(el('strong', '', ativos.length > 1 ? '🚨 ' + ativos.length + ' DISPAROS' : tipoDisparo(o)),
     el('span', '', 'Conta ' + o.conta + (o.cliente ? ' · ' + o.cliente.nome : '') + ' · ' + o.resumo + ' · ' + haQuanto(o.abertaEm)));
   const botoes = el('div', 'alarme-botoes');
-  if (alarme.ctx && alarme.ctx.state !== 'running') {
-    const som = el('button', '', '🔊 Ligar o som do alarme'); som.onclick = () => alarme.ctx.resume().catch(() => {}); botoes.append(som);
-  }
-  const meu = ativos.find((x) => x.situacao === 'em_atendimento');
-  if (meu && aoCiente) {
-    const ciente = el('button', 'forte', 'Ciente, estou atendendo a conta ' + meu.conta);
-    ciente.onclick = () => aoCiente(meu); botoes.append(ciente);
-  } else if (!aoCiente) {
-    const ir = el('a', 'botao forte', 'Ir para a fila'); ir.href = '/'; botoes.append(ir);
-  } else if (aoFicarDisponivel) {
-    const disp = el('button', 'forte', 'Ficar disponível e atender'); disp.onclick = aoFicarDisponivel; botoes.append(disp);
-  } else {
-    botoes.append(el('span', '', 'Esperando um operador disponível'));
-  }
+  botoes.append(...botoesAlarme(ativos, aoCiente, aoFicarDisponivel));
   alarme.faixa.replaceChildren(texto, botoes);
 }
 
