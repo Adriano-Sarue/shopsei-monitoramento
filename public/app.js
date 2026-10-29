@@ -59,10 +59,16 @@ async function iniciarTopo(ativa) {
     senha.onclick = trocarSenha;
     quem.append(senha);
   }
+  if (eu.login && eu.empresa) {
+    const turno = el('button', 'sutil', 'Trocar de turno');
+    turno.onclick = trocarTurno;
+    quem.append(turno);
+  }
   const sair = el('button', 'sutil', 'Sair');
   sair.onclick = async () => { try { await api('/api/logout', { method: 'POST', body: '{}' }); } finally { location.href = '/login.html'; } };
   quem.append(sair);
   topo.append(marca, nav, quem);
+  try { const t = sessionStorage.getItem('turno'); if (t) { sessionStorage.removeItem('turno'); setTimeout(() => toast(t), 300); } } catch { /* sem armazenamento */ }
   document.body.prepend(topo);
   // Em qualquer tela da operação o disparo precisa chamar a atenção. A Fila já busca as ocorrências e avisa sozinha.
   if (eu.empresa && ativa !== 'fila') {
@@ -196,6 +202,46 @@ function atualizarAlarme(lista, eu, aoCiente, aoFicarDisponivel) {
   const botoes = el('div', 'alarme-botoes');
   botoes.append(...botoesAlarme(ativos, aoCiente, aoFicarDisponivel));
   alarme.faixa.replaceChildren(texto, botoes);
+}
+
+// Troca de turno: quem sai escolhe quem entra; quem entra digita só a própria senha. Os chamados em
+// atendimento passam direto para quem entra, sem voltar para a fila.
+async function trocarTurno() {
+  let info;
+  try { info = await api('/api/turno'); } catch (e) { toast(e.message); return; }
+  const dlg = el('dialog');
+  const form = el('form');
+  form.append(el('h3', '', 'Trocar de turno'));
+  form.append(el('p', 'mute', info.comigo
+    ? (info.comigo === 1 ? 'O chamado em atendimento com você passa' : 'Os ' + info.comigo + ' chamados em atendimento com você passam') + ' direto para quem entrar, com todo o histórico.'
+    : 'Você não tem chamados em atendimento agora.'));
+  const lq = el('label', '', 'Quem vai entrar');
+  const quem = el('select'); quem.required = true; quem.id = 'turno-quem';
+  quem.append(new Option('Escolha o operador…', ''));
+  for (const c of info.colegas) quem.append(new Option(c.nome, String(c.id)));
+  lq.append(quem); form.append(lq);
+  const ls = el('label', '', 'Senha de quem vai entrar');
+  const senha = el('input'); senha.type = 'password'; senha.required = true; senha.autocomplete = 'off'; senha.id = 'turno-senha';
+  ls.append(senha); form.append(ls);
+  const erro = el('div', 'msg erro');
+  const botoes = el('div', 'botoes');
+  const cancelar = el('button', '', 'Cancelar'); cancelar.type = 'button'; cancelar.onclick = () => dlg.close();
+  const ok = el('button', 'marca-btn', 'Entrar no turno'); ok.type = 'submit';
+  botoes.append(cancelar, ok);
+  form.append(erro, botoes);
+  form.onsubmit = async (ev) => {
+    ev.preventDefault(); ok.disabled = true;
+    try {
+      const r = await api('/api/turno', { method: 'POST', body: JSON.stringify({ usuarioId: Number(quem.value), senha: senha.value }) });
+      sessionStorage.setItem('turno', 'Turno com ' + r.nome + (r.passadas ? ' · ' + r.passadas + (r.passadas === 1 ? ' chamado passado' : ' chamados passados') : ''));
+      location.reload();
+    } catch (e) { erro.textContent = e.message; senha.value = ''; senha.focus(); ok.disabled = false; }
+  };
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.append(form);
+  document.body.append(dlg);
+  dlg.showModal();
+  quem.focus();
 }
 
 function trocarSenha() {

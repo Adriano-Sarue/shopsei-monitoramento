@@ -246,3 +246,55 @@ test('disparo vem marcado como alarme; falha de energia não; logo e ícone são
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+test('troca de turno: quem entra digita só a senha e recebe os chamados', async () => {
+  const repo = new MemoryRepo();
+  const { id: eid } = await repo.criarEmpresa({ nome: 'Shop Sei', rotas: [] });
+  const { id: outra } = await repo.criarEmpresa({ nome: 'Outra', rotas: [] });
+  await repo.criarUsuario({ empresaId: eid, login: 'ana', nome: 'Ana', papel: 'operador', senhaHash: await hashSenha('senha-ana-1') });
+  const beto = await repo.criarUsuario({ empresaId: eid, login: 'beto', nome: 'Beto', papel: 'operador', senhaHash: await hashSenha('senha-beto-1') });
+  const inativo = await repo.criarUsuario({ empresaId: eid, login: 'caio', nome: 'Caio', papel: 'operador', senhaHash: await hashSenha('senha-caio-1') });
+  await repo.atualizarUsuario(eid, inativo.id, { ativo: false });
+  const estranho = await repo.criarUsuario({ empresaId: outra, login: 'zeca', nome: 'Zeca', papel: 'operador', senhaHash: await hashSenha('senha-zeca-1') });
+  const { queue, server, base } = await montar({ repo });
+  const json = { 'content-type': 'application/json' };
+  const cookieDe = (r: Response) => (r.headers.get('set-cookie') ?? '').split(';')[0]!;
+  const entrar = await fetch(`${base}/api/login`, { method: 'POST', headers: json, body: JSON.stringify({ login: 'ana', senha: 'senha-ana-1' }) });
+  const a = { ...json, cookie: cookieDe(entrar) };
+  const turno = (body: unknown, h = a) => fetch(`${base}/api/turno`, { method: 'POST', headers: h, body: JSON.stringify(body) });
+  try {
+    await fetch(`${base}/api/operadores`, { method: 'POST', headers: a, body: JSON.stringify({ disponivel: true }) });
+    queue.handleEvent(ev('0013', '1130 01 003'));
+    const info = await (await fetch(`${base}/api/turno`, { headers: a })).json() as { colegas: { id: number; nome: string }[]; comigo: number };
+    // Só colegas ativos da mesma empresa, e nunca o próprio operador.
+    assert.deepEqual(info.colegas.map((c) => c.nome), ['Beto']);
+    assert.equal(info.comigo, 1);
+
+    assert.equal((await turno({ usuarioId: beto.id, senha: 'errada' })).status, 403);
+    assert.equal((await turno({ usuarioId: estranho.id, senha: 'senha-zeca-1' })).status, 400);
+    assert.equal((await turno({ usuarioId: inativo.id, senha: 'senha-caio-1' })).status, 400);
+    assert.equal(queue.list()[0]!.operador, 'Ana');
+
+    const ok = await turno({ usuarioId: beto.id, senha: 'senha-beto-1' });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(await ok.json(), { nome: 'Beto', passadas: 1 });
+    const b = { ...json, cookie: cookieDe(ok) };
+    // A sessão de quem saiu acabou; o computador agora é do Beto, já disponível e com o chamado.
+    assert.equal((await fetch(`${base}/api/eu`, { headers: a })).status, 401);
+    const eu = await (await fetch(`${base}/api/eu`, { headers: b })).json() as { nome: string; disponivel: boolean };
+    assert.equal(eu.nome, 'Beto');
+    assert.equal(eu.disponivel, true);
+    const [oc] = await (await fetch(`${base}/api/ocorrencias`, { headers: b })).json() as { operador: string; situacao: string; acoes: { descricao: string }[] }[];
+    assert.equal(oc!.operador, 'Beto');
+    assert.equal(oc!.situacao, 'em_atendimento');
+    assert.match(oc!.acoes.at(-1)!.descricao, /passada de Ana para Beto/);
+
+    // Senha errada repetida bloqueia, como no login.
+    const volta = await fetch(`${base}/api/login`, { method: 'POST', headers: json, body: JSON.stringify({ login: 'ana', senha: 'senha-ana-1' }) });
+    const a2 = { ...json, cookie: cookieDe(volta) };
+    for (let i = 0; i < 5; i++) await turno({ usuarioId: beto.id, senha: 'errada' }, a2);
+    assert.equal((await turno({ usuarioId: beto.id, senha: 'senha-beto-1' }, a2)).status, 429);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});

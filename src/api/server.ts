@@ -581,6 +581,34 @@ export function createApi(central: Central, opts: ApiOptions): Server {
       const fila = central.fila(eid);
       const clientes = central.clientes(eid);
 
+      // Troca de turno no mesmo computador: quem sai escolhe quem entra, e quem entra só digita a própria senha.
+      if (url.pathname === '/api/turno') {
+        if (!q.sessao) return send(res, 400, { erro: 'Disponível só para quem entrou com usuário' });
+        const colegas = (await repo.listarUsuarios(eid)).filter((u) => u.ativo && u.id !== q.sessao!.usuarioId);
+        if (req.method === 'GET') {
+          const comigo = fila.list().filter((o) => o.situacao === 'em_atendimento' && o.operador === q.nome).length;
+          return send(res, 200, { colegas: colegas.map((u) => ({ id: u.id, nome: u.nome })), comigo });
+        }
+        if (req.method !== 'POST') return send(res, 405, { erro: 'Método não permitido' });
+        const body = await readJson(req);
+        const ip = `ip|${clienteIp(req)}`;
+        const chave = `turno|${eid}|${Number(body.usuarioId)}|${ip}`;
+        if (sessoes.bloqueado(chave) || sessoes.bloqueado(ip, 25)) return send(res, 429, { erro: 'Muitas tentativas. Aguarde alguns minutos.' });
+        const u = colegas.find((c) => c.id === Number(body.usuarioId));
+        if (!u) return send(res, 400, { erro: 'Escolha quem vai entrar no turno' });
+        if (!(await conferirSenha(String(body.senha ?? ''), u.senhaHash))) {
+          sessoes.registrarFalha(chave);
+          sessoes.registrarFalha(ip);
+          // 403 e não 401: 401 faria a tela de quem está saindo cair no login.
+          return send(res, 403, { erro: 'Senha incorreta' });
+        }
+        sessoes.limparFalhas(chave);
+        if (u.nome === q.nome) return send(res, 400, { erro: 'Quem entra precisa ser outra pessoa' });
+        const passadas = fila.passarTurno(q.nome!, u.nome);
+        sessoes.encerrar(q.token);
+        const token = sessoes.criar({ usuarioId: u.id, empresaId: u.empresaId, login: u.login, nome: u.nome, papel: u.papel });
+        return send(res, 200, { nome: u.nome, passadas: passadas.length }, 'application/json', { 'set-cookie': cookieSessao(req, token, 12 * 3600) });
+      }
       if (req.method === 'GET' && url.pathname === '/api/estado') {
         const ultimo = opts.ultimoEvento?.(eid);
         return send(res, 200, { agora: new Date().toISOString(), iniciadoEm: INICIO.toISOString(), ultimoEventoEm: ultimo?.toISOString() ?? null });

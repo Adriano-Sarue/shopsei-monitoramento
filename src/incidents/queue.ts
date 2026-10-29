@@ -94,6 +94,23 @@ export class IncidentQueue {
     return devolvidas;
   }
 
+  // Troca de turno: o que estava em atendimento com quem sai passa direto para quem entra (sem voltar à
+  // fila nem perder o histórico). Quem sai fica indisponível e quem entra, disponível.
+  passarTurno(de: string, para: string): Ocorrencia[] {
+    this.operators.set(de, { disponivel: false });
+    this.operators.set(para, { disponivel: true });
+    const passadas: Ocorrencia[] = [];
+    for (const i of this.incidents) {
+      if (i.situacao !== 'em_atendimento' || i.operador !== de) continue;
+      i.operador = para;
+      i.acoes.push({ em: this.now(), descricao: `Troca de turno: passada de ${de} para ${para}` });
+      this.changed(i);
+      passadas.push(i);
+    }
+    this.distribute();
+    return passadas;
+  }
+
   // Tira da memória as ocorrências encerradas há mais de maxIdadeMs (continuam no banco).
   podar(maxIdadeMs: number): void {
     const corte = this.now().getTime() - maxIdadeMs;
