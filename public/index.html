@@ -29,7 +29,7 @@
     <h3>Concluir ocorrência</h3>
     <p class="mute" id="dlg-resumo" style="margin:0 0 14px"></p>
     <label>Motivo <input id="motivo" list="motivos" required placeholder="Ex.: Acionamento indevido">
-      <datalist id="motivos"><option value="Acionamento indevido"><option value="Alarme falso"><option value="Falha de energia do cliente"><option value="Falha de comunicação"><option value="Contato com o cliente realizado"><option value="Providências acionadas"></datalist>
+      <datalist id="motivos"><option value="Acionamento indevido"><option value="Alarme falso"><option value="Falha de energia do cliente"><option value="Falha de comunicação"><option value="Contato com o cliente realizado"><option value="Providências acionadas"><option value="Cliente confirmou a palavra-chave"><option value="Veículo de apoio verificou o local"><option value="Técnico no local"></datalist>
     </label>
     <label>Texto da conclusão (opcional) <textarea id="conclusao" rows="3"></textarea></label>
     <div id="dlg-erro" class="msg erro"></div>
@@ -62,6 +62,7 @@ function cienteDoDisparo(o) {
   if (cam) abrirCamera(cam, 0);
   return anotar(o, 'Ciente do disparo, iniciando atendimento' + (cam ? ' (câmera ' + cam.nome + ' aberta)' : ''));
 }
+const ACOES_RAPIDAS = ['Cliente confirmou a palavra-chave', 'Veículo de apoio a caminho', 'Técnico no local'];
 const rascunhos = {};
 
 async function anotar(o, descricao) {
@@ -117,6 +118,15 @@ function card(o, nova) {
       pl.append(l);
     }
     c.append(pl);
+    // Registros rápidos do atendimento: um clique grava a ação com hora e operador.
+    const rapidas = el('div', 'rapidas');
+    for (const texto of ACOES_RAPIDAS) {
+      const feito = o.acoes.some((a) => a.descricao === texto);
+      const b = el('button', 'mini' + (feito ? ' feito' : ''), (feito ? '✓ ' : '') + texto); b.type = 'button';
+      b.onclick = () => anotar(o, texto);
+      rapidas.append(b);
+    }
+    c.append(rapidas);
     const nota = el('form', 'nota');
     const campo = el('input'); campo.placeholder = 'Anotar (ex.: polícia acionada, viatura 12)'; campo.maxLength = 500;
     campo.value = rascunhos[o.id] || ''; campo.dataset.ocorrencia = o.id;
