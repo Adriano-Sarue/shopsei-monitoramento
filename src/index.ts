@@ -156,7 +156,7 @@ const api = createApi(central, {
   aoVivo, cofre, urlEventos: process.env.PORTARIA_URL_EVENTOS,
   simular,
   recepcao: () => ({
-    banco: process.env.DATABASE_URL ? 'PostgreSQL' : process.env.BANCO_LOCAL ? 'Banco local (pasta ' + process.env.BANCO_LOCAL + ')' : 'Memória (sem banco)',
+    banco: process.env.DATABASE_URL ? 'PostgreSQL' : process.env.BANCO_LOCAL ? 'Banco local, gravado neste computador' : 'Memória (sem banco)',
     surgard: surgard ? {
       porta: Number(process.env.SURGARD_PORTA_PUBLICA ?? process.env.SURGARD_TCP_PORTA), conexoes: surgard.conexoes,
       ultimoSinal: surgard.ultimoSinal?.toISOString() ?? null, semSinal: vigiaBase?.semSinal ?? false, limiteSeg: Number(process.env.BASE_SEM_SINAL_SEG ?? 120),
