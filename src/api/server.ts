@@ -477,6 +477,10 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         return send(res, 200, usuarioPublico(u), 'application/json', { 'set-cookie': cookieSessao(req, token, 12 * 3600) });
       }
       if (!q) return send(res, 401, { erro: 'Faça login' });
+      // Durante a troca de turno a tela fica travada: nada muda até alguém entrar no turno ou quem saía destravar.
+      if (q.sessao?.travada && req.method !== 'GET' && !url.pathname.startsWith('/api/turno')) {
+        return send(res, 423, { erro: 'Tela travada na troca de turno' });
+      }
 
       if (req.method === 'POST' && url.pathname === '/api/logout') {
         sessoes.encerrar(q.token);
@@ -489,6 +493,7 @@ export function createApi(central: Central, opts: ApiOptions): Server {
           login: q.sessao?.login ?? null, nome: q.nome ?? null, papel: q.papel, plataforma: q.empresaId === null,
           empresa: empresa ? { id: empresa.id, nome: empresa.nome } : null,
           disponivel: q.nome && empresa ? central.fila(empresa.id).estaDisponivel(q.nome) : false,
+          travada: q.sessao?.travada === true,
         });
       }
       if (req.method === 'POST' && url.pathname === '/api/senha') {
@@ -582,6 +587,24 @@ export function createApi(central: Central, opts: ApiOptions): Server {
       const clientes = central.clientes(eid);
 
       // Troca de turno no mesmo computador: quem sai escolhe quem entra, e quem entra só digita a própria senha.
+      if (url.pathname === '/api/turno/iniciar' || url.pathname === '/api/turno/cancelar') {
+        if (!q.sessao) return send(res, 400, { erro: 'Disponível só para quem entrou com usuário' });
+        if (req.method !== 'POST') return send(res, 405, { erro: 'Método não permitido' });
+        if (url.pathname.endsWith('/iniciar')) { q.sessao.travada = true; return send(res, 200, { ok: true }); }
+        const body = await readJson(req);
+        const ip = `ip|${clienteIp(req)}`;
+        const chave = `destravar|${q.sessao.usuarioId}|${ip}`;
+        if (sessoes.bloqueado(chave) || sessoes.bloqueado(ip, 25)) return send(res, 429, { erro: 'Muitas tentativas. Aguarde alguns minutos.' });
+        const u = await repo.buscarUsuario(q.sessao.login);
+        if (!u || !(await conferirSenha(String(body.senha ?? ''), u.senhaHash))) {
+          sessoes.registrarFalha(chave);
+          sessoes.registrarFalha(ip);
+          return send(res, 403, { erro: 'Senha incorreta' });
+        }
+        sessoes.limparFalhas(chave);
+        q.sessao.travada = false;
+        return send(res, 200, { ok: true });
+      }
       if (url.pathname === '/api/turno') {
         if (!q.sessao) return send(res, 400, { erro: 'Disponível só para quem entrou com usuário' });
         const colegas = (await repo.listarUsuarios(eid)).filter((u) => u.ativo && u.id !== q.sessao!.usuarioId);

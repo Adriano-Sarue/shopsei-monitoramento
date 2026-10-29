@@ -61,13 +61,14 @@ async function iniciarTopo(ativa) {
   }
   if (eu.login && eu.empresa) {
     const turno = el('button', 'sutil', 'Trocar de turno');
-    turno.onclick = trocarTurno;
+    turno.onclick = () => trocarTurno(eu);
     quem.append(turno);
   }
   const sair = el('button', 'sutil', 'Sair');
   sair.onclick = async () => { try { await api('/api/logout', { method: 'POST', body: '{}' }); } finally { location.href = '/login.html'; } };
   quem.append(sair);
   topo.append(marca, nav, quem);
+  if (eu.travada) trocarTurno(eu, true);
   try { const t = sessionStorage.getItem('turno'); if (t) { sessionStorage.removeItem('turno'); setTimeout(() => toast(t), 300); } } catch { /* sem armazenamento */ }
   document.body.prepend(topo);
   // Em qualquer tela da operação o disparo precisa chamar a atenção. A Fila já busca as ocorrências e avisa sozinha.
@@ -80,7 +81,7 @@ async function iniciarTopo(ativa) {
 
 // Alarme de disparo: pop-up, faixa vermelha piscando e sirene até um operador ficar ciente. Toca enquanto houver disparo
 // esperando operador, ou disparo entregue a você que você ainda não marcou como ciente.
-const alarme = { ctx: null, nos: null, faixa: null, titulo: document.title, pisca: null, avisadas: new Set(), popup: null, chave: '', minimizadas: new Set() };
+const alarme = { ctx: null, nos: null, faixa: null, titulo: document.title, pisca: null, avisadas: new Set(), popup: null, chave: '', minimizadas: new Set(), travada: false };
 
 function sirene(ligar) {
   if (!ligar) {
@@ -180,7 +181,7 @@ function atualizarAlarme(lista, eu, aoCiente, aoFicarDisponivel) {
   const ativos = emAlarme(lista, eu).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));
   document.body.classList.toggle('em-alarme', ativos.length > 0);
   sirene(ativos.length > 0);
-  popupAlarme(ativos, aoCiente, aoFicarDisponivel);
+  popupAlarme(alarme.travada ? [] : ativos, aoCiente, aoFicarDisponivel);
   if (!ativos.length) {
     if (alarme.faixa) { alarme.faixa.remove(); alarme.faixa = null; }
     if (alarme.pisca) { clearInterval(alarme.pisca); alarme.pisca = null; document.title = alarme.titulo; }
@@ -205,16 +206,22 @@ function atualizarAlarme(lista, eu, aoCiente, aoFicarDisponivel) {
 }
 
 // Troca de turno: quem sai escolhe quem entra; quem entra digita só a própria senha. Os chamados em
-// atendimento passam direto para quem entra, sem voltar para a fila.
-async function trocarTurno() {
+// atendimento passam direto para quem entra, sem voltar para a fila. Ao abrir, a tela trava (no servidor,
+// então recarregar não destrava): para cancelar, só com a senha de quem estava.
+async function trocarTurno(eu, jaTravada) {
   let info;
-  try { info = await api('/api/turno'); } catch (e) { toast(e.message); return; }
-  const dlg = el('dialog');
+  try {
+    if (!jaTravada) await api('/api/turno/iniciar', { method: 'POST', body: '{}' });
+    info = await api('/api/turno');
+  } catch (e) { toast(e.message); return; }
+  alarme.travada = true; popupAlarme([]);
+  const dlg = el('dialog', 'turno-travado');
+  dlg.addEventListener('cancel', (ev) => ev.preventDefault());
   const form = el('form');
-  form.append(el('h3', '', 'Trocar de turno'));
-  form.append(el('p', 'mute', info.comigo
-    ? (info.comigo === 1 ? 'O chamado em atendimento com você passa' : 'Os ' + info.comigo + ' chamados em atendimento com você passam') + ' direto para quem entrar, com todo o histórico.'
-    : 'Você não tem chamados em atendimento agora.'));
+  form.append(el('h3', '', '🔒 Trocar de turno'));
+  form.append(el('p', 'mute', 'A tela fica travada até alguém entrar no turno. ' + (info.comigo
+    ? (info.comigo === 1 ? 'O chamado em atendimento com ' + eu.nome + ' passa' : 'Os ' + info.comigo + ' chamados em atendimento com ' + eu.nome + ' passam') + ' direto para quem entrar, com todo o histórico.'
+    : eu.nome + ' não tem chamados em atendimento agora.')));
   const lq = el('label', '', 'Quem vai entrar');
   const quem = el('select'); quem.required = true; quem.id = 'turno-quem';
   quem.append(new Option('Escolha o operador…', ''));
@@ -225,7 +232,7 @@ async function trocarTurno() {
   ls.append(senha); form.append(ls);
   const erro = el('div', 'msg erro');
   const botoes = el('div', 'botoes');
-  const cancelar = el('button', '', 'Cancelar'); cancelar.type = 'button'; cancelar.onclick = () => dlg.close();
+  const cancelar = el('button', '', 'Cancelar'); cancelar.type = 'button';
   const ok = el('button', 'marca-btn', 'Entrar no turno'); ok.type = 'submit';
   botoes.append(cancelar, ok);
   form.append(erro, botoes);
@@ -237,8 +244,29 @@ async function trocarTurno() {
       location.reload();
     } catch (e) { erro.textContent = e.message; senha.value = ''; senha.focus(); ok.disabled = false; }
   };
+  // Cancelar pede a senha de quem estava no turno.
+  const sair = el('form'); sair.hidden = true;
+  sair.append(el('h3', '', '🔒 Cancelar a troca de turno'), el('p', 'mute', 'Para destravar a tela, ' + eu.nome + ' digita a própria senha.'));
+  const lv = el('label', '', 'Senha de ' + eu.nome);
+  const minha = el('input'); minha.type = 'password'; minha.required = true; minha.autocomplete = 'current-password'; minha.id = 'turno-minha-senha';
+  lv.append(minha); sair.append(lv);
+  const erro2 = el('div', 'msg erro');
+  const botoes2 = el('div', 'botoes');
+  const voltar = el('button', '', 'Voltar'); voltar.type = 'button';
+  const destravar = el('button', 'marca-btn', 'Destravar'); destravar.type = 'submit';
+  botoes2.append(voltar, destravar);
+  sair.append(erro2, botoes2);
+  cancelar.onclick = () => { form.hidden = true; sair.hidden = false; erro2.textContent = ''; minha.value = ''; minha.focus(); };
+  voltar.onclick = () => { sair.hidden = true; form.hidden = false; quem.focus(); };
+  sair.onsubmit = async (ev) => {
+    ev.preventDefault(); destravar.disabled = true;
+    try {
+      await api('/api/turno/cancelar', { method: 'POST', body: JSON.stringify({ senha: minha.value }) });
+      alarme.travada = false; dlg.close(); toast('Troca de turno cancelada');
+    } catch (e) { erro2.textContent = e.message; minha.value = ''; minha.focus(); destravar.disabled = false; }
+  };
   dlg.addEventListener('close', () => dlg.remove());
-  dlg.append(form);
+  dlg.append(form, sair);
   document.body.append(dlg);
   dlg.showModal();
   quem.focus();

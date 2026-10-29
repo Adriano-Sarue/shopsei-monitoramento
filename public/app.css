@@ -299,3 +299,4 @@ dialog.alarme-popup::backdrop { background: rgba(120, 0, 20, .38); }
   :root { --card: #fff; --card-forte: #fff; }
   @media (prefers-color-scheme: dark) { :root { --card: #1c1f28; --card-forte: #242834; } }
 }
+dialog form[hidden] { display: none; }

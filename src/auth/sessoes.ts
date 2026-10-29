@@ -10,6 +10,8 @@ export interface Sessao {
   papel: Papel;
   expira: number;
   visto: number;
+  // Tela travada na troca de turno: só passa o turno ou destrava com a senha de quem está saindo.
+  travada?: boolean;
 }
 
 const DURACAO_MS = 12 * 60 * 60 * 1000;

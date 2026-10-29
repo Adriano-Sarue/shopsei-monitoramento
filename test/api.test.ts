@@ -111,7 +111,7 @@ test('login por usuário: sessão, perfis, bloqueio e revogação', async () => 
     const c = { ...json, cookie: cookieDe(ok) };
 
     assert.deepEqual(await (await fetch(`${base}/api/eu`, { headers: c })).json(), {
-      login: 'ana', nome: 'Ana', papel: 'operador', plataforma: false, empresa: { id: eid, nome: 'Shop Sei' }, disponivel: false,
+      login: 'ana', nome: 'Ana', papel: 'operador', plataforma: false, empresa: { id: eid, nome: 'Shop Sei' }, disponivel: false, travada: false,
     });
     // Operador não vê cadastro nem usuários, e não abre essas páginas.
     assert.equal((await fetch(`${base}/api/clientes`, { headers: c })).status, 403);
@@ -270,6 +270,24 @@ test('troca de turno: quem entra digita só a senha e recebe os chamados', async
     assert.deepEqual(info.colegas.map((c) => c.nome), ['Beto']);
     assert.equal(info.comigo, 1);
 
+    // Ao clicar em "Trocar de turno" a tela trava: nada muda até alguém entrar ou quem saía destravar com a senha.
+    const iniciar = (h = a) => fetch(`${base}/api/turno/iniciar`, { method: 'POST', headers: h, body: '{}' });
+    const cancelar = (senha: string) => fetch(`${base}/api/turno/cancelar`, { method: 'POST', headers: a, body: JSON.stringify({ senha }) });
+    const travada = async (h = a) => ((await (await fetch(`${base}/api/eu`, { headers: h })).json()) as { travada: boolean }).travada;
+    assert.equal(await travada(), false);
+    assert.equal((await iniciar()).status, 200);
+    assert.equal(await travada(), true);
+    assert.equal((await fetch(`${base}/api/operadores`, { method: 'POST', headers: a, body: JSON.stringify({ disponivel: false }) })).status, 423);
+    assert.equal((await fetch(`${base}/api/logout`, { method: 'POST', headers: a, body: '{}' })).status, 423);
+    assert.equal((await fetch(`${base}/api/ocorrencias`, { headers: a })).status, 200);
+    // A senha de quem vai entrar não destrava; só a de quem estava.
+    assert.equal((await cancelar('senha-beto-1')).status, 403);
+    assert.equal(await travada(), true);
+    assert.equal((await cancelar('senha-ana-1')).status, 200);
+    assert.equal(await travada(), false);
+    assert.equal(queue.estaDisponivel('Ana'), true);
+    assert.equal((await iniciar()).status, 200);
+
     assert.equal((await turno({ usuarioId: beto.id, senha: 'errada' })).status, 403);
     assert.equal((await turno({ usuarioId: estranho.id, senha: 'senha-zeca-1' })).status, 400);
     assert.equal((await turno({ usuarioId: inativo.id, senha: 'senha-caio-1' })).status, 400);
@@ -284,6 +302,7 @@ test('troca de turno: quem entra digita só a senha e recebe os chamados', async
     const eu = await (await fetch(`${base}/api/eu`, { headers: b })).json() as { nome: string; disponivel: boolean };
     assert.equal(eu.nome, 'Beto');
     assert.equal(eu.disponivel, true);
+    assert.equal(await travada(b), false);
     const [oc] = await (await fetch(`${base}/api/ocorrencias`, { headers: b })).json() as { operador: string; situacao: string; acoes: { descricao: string }[] }[];
     assert.equal(oc!.operador, 'Beto');
     assert.equal(oc!.situacao, 'em_atendimento');
