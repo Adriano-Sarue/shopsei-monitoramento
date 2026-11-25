@@ -2,8 +2,8 @@ import type { Ocorrencia } from '../incidents/queue.js';
 import { PortariaMemoria } from '../portaria/memoria.js';
 import type { AlarmEvent } from '../protocols/types.js';
 import {
-  ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarAjustes, validarCliente, validarEmpresa, validarUsuario,
-  type Ajustes, type Cliente, type Empresa, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Rota, type UltimoEvento, type Usuario,
+  ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarAjustes, validarBilhete, validarCliente, validarEmpresa, validarUsuario,
+  type Ajustes, type Bilhete, type Cliente, type Midia, type NovoBilhete, type Empresa, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Rota, type UltimoEvento, type Usuario,
 } from './repositorio.js';
 
 type ClienteGuardado = Cliente & { empresaId: number };
@@ -19,6 +19,8 @@ export class MemoryRepo implements Repositorio {
   private nextId = 1;
   private nextUsuario = 1;
   private nextEmpresa = 1;
+  private nextBilhete = 1;
+  private readonly midias: (Midia & { id: number; empresaId: number })[] = [];
 
   async init(): Promise<void> {}
 
@@ -103,7 +105,7 @@ export class MemoryRepo implements Repositorio {
   async criarCliente(empresaId: number, entrada: NovoCliente): Promise<Cliente> {
     const c = validarCliente(entrada);
     this.checarContas(empresaId, c.contas);
-    const cliente: ClienteGuardado = { ...c, id: this.nextId++, ativo: true, empresaId };
+    const cliente: ClienteGuardado = { ...c, id: this.nextId++, ativo: true, empresaId, bilhetes: [] };
     this.clientes.push(cliente);
     return this.publico(cliente);
   }
@@ -113,8 +115,40 @@ export class MemoryRepo implements Repositorio {
     const i = this.clientes.findIndex((x) => x.id === id && x.empresaId === empresaId);
     if (i < 0) throw new NaoEncontradoError(`Cliente ${id} não existe`);
     this.checarContas(empresaId, c.contas, id);
-    this.clientes[i] = { ...c, id, ativo: this.clientes[i]!.ativo, empresaId };
+    this.clientes[i] = { ...c, id, ativo: this.clientes[i]!.ativo, empresaId, bilhetes: this.clientes[i]!.bilhetes ?? [] };
     return this.publico(this.clientes[i]!);
+  }
+
+  private cliente(empresaId: number, id: number): ClienteGuardado {
+    const c = this.clientes.find((x) => x.id === id && x.empresaId === empresaId);
+    if (!c) throw new NaoEncontradoError(`Cliente ${id} não existe`);
+    return c;
+  }
+
+  async criarBilhete(empresaId: number, clienteId: number, entrada: NovoBilhete): Promise<Bilhete> {
+    const b = validarBilhete(entrada);
+    const c = this.cliente(empresaId, clienteId);
+    const novo: Bilhete = { id: this.nextBilhete++, texto: b.texto, autor: b.autor, validoAte: b.validoAte, criadoEm: new Date() };
+    (c.bilhetes ??= []).push(novo);
+    return structuredClone(novo);
+  }
+
+  async removerBilhete(empresaId: number, clienteId: number, id: number): Promise<void> {
+    const c = this.cliente(empresaId, clienteId);
+    const i = (c.bilhetes ?? []).findIndex((b) => b.id === id);
+    if (i < 0) throw new NaoEncontradoError(`Bilhete ${id} não existe`);
+    c.bilhetes!.splice(i, 1);
+  }
+
+  async salvarMidia(empresaId: number, m: Midia): Promise<number> {
+    const id = this.midias.length + 1;
+    this.midias.push({ ...m, dados: Buffer.from(m.dados), id, empresaId });
+    return id;
+  }
+
+  async lerMidia(empresaId: number, id: number): Promise<Midia | undefined> {
+    const m = this.midias.find((x) => x.id === id && x.empresaId === empresaId);
+    return m && { ocorrenciaId: m.ocorrenciaId, tipo: m.tipo, dados: m.dados };
   }
 
   async listarUsuarios(empresaId: number | null): Promise<Usuario[]> {

@@ -6,8 +6,8 @@ import type { Ocorrencia, Situacao } from '../incidents/queue.js';
 import { PortariaPg } from '../portaria/pg.js';
 import type { AlarmEvent } from '../protocols/types.js';
 import {
-  ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarAjustes, validarCliente, validarEmpresa, validarUsuario,
-  type Ajustes, type Cliente, type Empresa, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Rota, type UltimoEvento, type Usuario,
+  ContaDuplicadaError, LoginDuplicadoError, NaoEncontradoError, RotaDuplicadaError, validarAjustes, validarBilhete, validarCliente, validarEmpresa, validarUsuario,
+  type Ajustes, type Bilhete, type Cliente, type Midia, type NovoBilhete, type Empresa, type FiltroHistorico, type NovoCliente, type NovoUsuario, type Repositorio, type Rota, type UltimoEvento, type Usuario,
 } from './repositorio.js';
 
 const SCHEMA = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'db', 'schema.sql');
@@ -28,6 +28,14 @@ interface OcorrenciaRow {
   conclusao: string | null;
   eventos: AlarmEvent[];
   acoes: { em: string; operador?: string | null; descricao: string }[];
+  extras: Extras | null;
+}
+
+// Rascunho, apoio e fotos da ocorrência, gravados juntos em JSON (datas como texto).
+interface Extras {
+  rascunho?: { motivo?: string; texto?: string; em: string; operador: string };
+  apoio?: { viatura: string; situacao: NonNullable<Ocorrencia['apoio']>['situacao']; em: string };
+  midias?: { id: number; em: string; operador: string; descricao: string }[];
 }
 
 const duplicado = (err: unknown) => (err as { code?: string }).code === '23505';
@@ -120,15 +128,16 @@ export class PgRepo implements Repositorio {
   async salvarOcorrencia(o: Ocorrencia): Promise<void> {
     await this.pool.query(
       `INSERT INTO ocorrencias (id, empresa_id, conta, conta_cadastrada, prioridade, situacao, operador, aberta_em, atendida_em,
-                                encerrada_em, adiada_ate, motivo, conclusao, eventos, acoes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                                encerrada_em, adiada_ate, motivo, conclusao, eventos, acoes, extras)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        ON CONFLICT (id) DO UPDATE SET conta_cadastrada=$4, prioridade=$5, situacao=$6, operador=$7, atendida_em=$9,
-         encerrada_em=$10, adiada_ate=$11, motivo=$12, conclusao=$13, eventos=$14, acoes=$15
+         encerrada_em=$10, adiada_ate=$11, motivo=$12, conclusao=$13, eventos=$14, acoes=$15, extras=$16
        WHERE ocorrencias.empresa_id = $2`,
       [
         o.id, o.empresaId, o.conta, o.contaCadastrada, o.prioridade, o.situacao, o.operador ?? null, o.abertaEm,
         o.atendidaEm ?? null, o.encerradaEm ?? null, o.adiadaAte ?? null, o.motivo ?? null, o.conclusao ?? null,
         JSON.stringify(o.eventos), JSON.stringify(o.acoes),
+        JSON.stringify({ rascunho: o.rascunho, apoio: o.apoio, midias: o.midias }),
       ],
     );
   }
@@ -150,6 +159,9 @@ export class PgRepo implements Repositorio {
       conclusao: r.conclusao ?? undefined,
       eventos: r.eventos,
       acoes: r.acoes.map((a) => ({ em: new Date(a.em), operador: a.operador ?? undefined, descricao: a.descricao })),
+      rascunho: r.extras?.rascunho ? { ...r.extras.rascunho, em: new Date(r.extras.rascunho.em) } : undefined,
+      apoio: r.extras?.apoio ? { ...r.extras.apoio, em: new Date(r.extras.apoio.em) } : undefined,
+      midias: r.extras?.midias?.map((m) => ({ ...m, em: new Date(m.em) })),
     };
   }
 
@@ -183,13 +195,17 @@ export class PgRepo implements Repositorio {
         COALESCE((SELECT json_agg(numero ORDER BY numero) FROM contas WHERE cliente_id = c.id), '[]') AS contas,
         COALESCE((SELECT json_agg(json_build_object('nome', nome, 'telefone', telefone, 'ordem', ordem) ORDER BY ordem, id)
                   FROM contatos WHERE cliente_id = c.id), '[]') AS contatos,
-        COALESCE((SELECT json_agg(json_build_object('nome', nome, 'marca', marca, 'url', url, 'ordem', ordem) ORDER BY ordem, id)
-                  FROM cameras WHERE cliente_id = c.id), '[]') AS cameras
+        COALESCE((SELECT json_agg(json_build_object('nome', nome, 'marca', marca, 'url', url, 'fotoUrl', foto_url, 'ordem', ordem) ORDER BY ordem, id)
+                  FROM cameras WHERE cliente_id = c.id), '[]') AS cameras,
+        COALESCE((SELECT json_agg(json_build_object('id', id, 'texto', texto, 'autor', autor, 'validoAte', valido_ate::text, 'criadoEm', criado_em) ORDER BY criado_em, id)
+                  FROM bilhetes WHERE cliente_id = c.id), '[]') AS bilhetes
       FROM clientes c WHERE c.empresa_id = $1 ORDER BY c.nome`, [empresaId]);
     return rows.map((r) => ({
       id: Number(r.id),
       nome: r.nome,
       endereco: r.endereco ?? undefined,
+      referencia: r.referencia ?? undefined,
+      chaves: r.chaves ?? undefined,
       tipo: r.tipo ?? undefined,
       observacoes: r.observacoes ?? undefined,
       instrucoes: r.instrucoes ?? undefined,
@@ -201,8 +217,11 @@ export class PgRepo implements Repositorio {
       contatos: (r.contatos as { nome: string; telefone: string | null; ordem: number }[]).map((x) => ({
         nome: x.nome, telefone: x.telefone ?? undefined, ordem: x.ordem,
       })),
-      cameras: (r.cameras as { nome: string; marca: string | null; url: string; ordem: number }[]).map((x) => ({
-        nome: x.nome, marca: x.marca ?? undefined, url: x.url, ordem: x.ordem,
+      cameras: (r.cameras as { nome: string; marca: string | null; url: string; fotoUrl: string | null; ordem: number }[]).map((x) => ({
+        nome: x.nome, marca: x.marca ?? undefined, url: x.url, ...(x.fotoUrl ? { fotoUrl: x.fotoUrl } : {}), ordem: x.ordem,
+      })),
+      bilhetes: (r.bilhetes as { id: string; texto: string; autor: string; validoAte: string | null; criadoEm: string }[]).map((b) => ({
+        id: Number(b.id), texto: b.texto, autor: b.autor, validoAte: b.validoAte ?? undefined, criadoEm: new Date(b.criadoEm),
       })),
     }));
   }
@@ -222,7 +241,7 @@ export class PgRepo implements Repositorio {
       await db.query('INSERT INTO contatos (cliente_id, nome, telefone, ordem) VALUES ($1, $2, $3, $4)', [id, ct.nome, ct.telefone ?? null, ct.ordem]);
     }
     for (const cam of c.cameras ?? []) {
-      await db.query('INSERT INTO cameras (cliente_id, nome, marca, url, ordem) VALUES ($1, $2, $3, $4, $5)', [id, cam.nome, cam.marca ?? null, cam.url, cam.ordem]);
+      await db.query('INSERT INTO cameras (cliente_id, nome, marca, url, foto_url, ordem) VALUES ($1, $2, $3, $4, $5, $6)', [id, cam.nome, cam.marca ?? null, cam.url, cam.fotoUrl ?? null, cam.ordem]);
     }
   }
 
@@ -230,9 +249,9 @@ export class PgRepo implements Repositorio {
     const c = validarCliente(entrada);
     const id = await this.transacao(async (db) => {
       const { rows } = await db.query(
-        `INSERT INTO clientes (empresa_id, nome, endereco, tipo, observacoes, palavra_chave, contra_senha, instrucoes, intervalo_teste_horas)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-        [empresaId, c.nome, c.endereco ?? null, c.tipo ?? null, c.observacoes ?? null, c.palavraChave ?? null, c.contraSenha ?? null, c.instrucoes ?? null, c.intervaloTesteHoras ?? null],
+        `INSERT INTO clientes (empresa_id, nome, endereco, tipo, observacoes, palavra_chave, contra_senha, instrucoes, intervalo_teste_horas, referencia, chaves)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+        [empresaId, c.nome, c.endereco ?? null, c.tipo ?? null, c.observacoes ?? null, c.palavraChave ?? null, c.contraSenha ?? null, c.instrucoes ?? null, c.intervaloTesteHoras ?? null, c.referencia ?? null, c.chaves ?? null],
       );
       const novo = Number(rows[0].id);
       await this.gravarContasEContatos(db, empresaId, novo, c);
@@ -241,13 +260,45 @@ export class PgRepo implements Repositorio {
     return (await this.listarClientes(empresaId)).find((x) => x.id === id)!;
   }
 
+  async criarBilhete(empresaId: number, clienteId: number, entrada: NovoBilhete): Promise<Bilhete> {
+    const b = validarBilhete(entrada);
+    const { rows } = await this.pool.query(
+      `INSERT INTO bilhetes (cliente_id, texto, autor, valido_ate)
+       SELECT id, $3, $4, $5 FROM clientes WHERE id = $1 AND empresa_id = $2
+       RETURNING id, criado_em`,
+      [clienteId, empresaId, b.texto, b.autor, b.validoAte ?? null],
+    );
+    if (!rows[0]) throw new NaoEncontradoError(`Cliente ${clienteId} não existe`);
+    return { id: Number(rows[0].id), texto: b.texto, autor: b.autor, validoAte: b.validoAte, criadoEm: rows[0].criado_em };
+  }
+
+  async removerBilhete(empresaId: number, clienteId: number, id: number): Promise<void> {
+    const r = await this.pool.query(
+      'DELETE FROM bilhetes b USING clientes c WHERE b.id = $1 AND b.cliente_id = $2 AND c.id = b.cliente_id AND c.empresa_id = $3',
+      [id, clienteId, empresaId],
+    );
+    if (r.rowCount === 0) throw new NaoEncontradoError(`Bilhete ${id} não existe`);
+  }
+
+  async salvarMidia(empresaId: number, m: Midia): Promise<number> {
+    const { rows } = await this.pool.query('INSERT INTO midias (empresa_id, ocorrencia_id, tipo, dados) VALUES ($1, $2, $3, $4) RETURNING id', [
+      empresaId, m.ocorrenciaId, m.tipo, m.dados,
+    ]);
+    return Number(rows[0].id);
+  }
+
+  async lerMidia(empresaId: number, id: number): Promise<Midia | undefined> {
+    const { rows } = await this.pool.query('SELECT ocorrencia_id, tipo, dados FROM midias WHERE id = $1 AND empresa_id = $2', [id, empresaId]);
+    return rows[0] && { ocorrenciaId: Number(rows[0].ocorrencia_id), tipo: rows[0].tipo, dados: rows[0].dados };
+  }
+
   async atualizarCliente(empresaId: number, id: number, entrada: NovoCliente): Promise<Cliente> {
     const c = validarCliente(entrada);
     await this.transacao(async (db) => {
       const r = await db.query(
         `UPDATE clientes SET nome=$3, endereco=$4, tipo=$5, observacoes=$6, palavra_chave=$7, contra_senha=$8, instrucoes=$9,
-           intervalo_teste_horas=$10 WHERE id=$1 AND empresa_id=$2`,
-        [id, empresaId, c.nome, c.endereco ?? null, c.tipo ?? null, c.observacoes ?? null, c.palavraChave ?? null, c.contraSenha ?? null, c.instrucoes ?? null, c.intervaloTesteHoras ?? null],
+           intervalo_teste_horas=$10, referencia=$11, chaves=$12 WHERE id=$1 AND empresa_id=$2`,
+        [id, empresaId, c.nome, c.endereco ?? null, c.tipo ?? null, c.observacoes ?? null, c.palavraChave ?? null, c.contraSenha ?? null, c.instrucoes ?? null, c.intervaloTesteHoras ?? null, c.referencia ?? null, c.chaves ?? null],
       );
       if (r.rowCount === 0) throw new NaoEncontradoError(`Cliente ${id} não existe`);
       await db.query('DELETE FROM contas WHERE cliente_id = $1', [id]);

@@ -13,12 +13,58 @@ export interface Camera {
   nome: string;
   marca?: string;
   url: string;
+  // Endereço de uma FOTO da câmera (JPEG), que o servidor busca para mostrar a câmera dentro da ocorrência e
+  // anexar fotos. Ex. Hikvision: http://usuario:senha@ip:porta/ISAPI/Streaming/channels/101/picture. Nunca vai
+  // para o navegador (pode trazer senha); a tela recebe só "temFoto".
+  fotoUrl?: string;
   ordem: number;
+}
+
+// Bilhete: recado sobre o cliente que aparece em toda ocorrência dele até a validade (ex.: "dono viajando até dia 10").
+export interface Bilhete {
+  id: number;
+  texto: string;
+  autor: string;
+  criadoEm: Date;
+  // Último dia em que o bilhete vale (AAAA-MM-DD); vazio = até alguém apagar.
+  validoAte?: string;
+}
+
+export interface NovoBilhete {
+  texto: string;
+  autor: string;
+  validoAte?: string;
+}
+
+export function validarBilhete(b: NovoBilhete): NovoBilhete {
+  const texto = b.texto?.trim();
+  if (!texto) throw new Error('Escreva o bilhete');
+  if (texto.length > 1000) throw new Error('Bilhete longo demais (máximo 1000 caracteres)');
+  const validoAte = b.validoAte?.trim() || undefined;
+  if (validoAte && (!/^\d{4}-\d{2}-\d{2}$/.test(validoAte) || Number.isNaN(Date.parse(validoAte)))) throw new Error('Validade do bilhete inválida');
+  return { texto, autor: b.autor, validoAte };
+}
+
+// Vale até o fim do dia da validade, no horário de Brasília.
+export function bilheteValido(b: Bilhete, agora = new Date()): boolean {
+  if (!b.validoAte) return true;
+  return agora.getTime() < new Date(`${b.validoAte}T23:59:59.999-03:00`).getTime();
+}
+
+// Foto anexada a uma ocorrência (tirada da câmera ou colada pelo operador). Os bytes ficam à parte.
+export interface Midia {
+  ocorrenciaId: number;
+  tipo: string;
+  dados: Buffer;
 }
 
 export interface NovoCliente {
   nome: string;
   endereco?: string;
+  // Ponto de referência para o apoio achar o local (ex.: "ao lado da padaria").
+  referencia?: string;
+  // Onde ficam as chaves e quem tem (ex.: "chaveiro preto com o vizinho do 12").
+  chaves?: string;
   tipo?: string;
   observacoes?: string;
   // Instruções próprias do cliente para o operador; valem mais que o plano de ação padrão.
@@ -35,6 +81,8 @@ export interface NovoCliente {
 export interface Cliente extends NovoCliente {
   id: number;
   ativo: boolean;
+  // Bilhetes ficam numa tabela própria: o cadastro do cliente não os apaga ao salvar.
+  bilhetes?: Bilhete[];
 }
 
 export class ContaDuplicadaError extends Error {}
@@ -171,6 +219,11 @@ export interface Repositorio {
   listarClientes(empresaId: number): Promise<Cliente[]>;
   criarCliente(empresaId: number, c: NovoCliente): Promise<Cliente>;
   atualizarCliente(empresaId: number, id: number, c: NovoCliente): Promise<Cliente>;
+  criarBilhete(empresaId: number, clienteId: number, b: NovoBilhete): Promise<Bilhete>;
+  removerBilhete(empresaId: number, clienteId: number, id: number): Promise<void>;
+  // Fotos das ocorrências (bytes da imagem). Devolve o número da mídia.
+  salvarMidia(empresaId: number, m: Midia): Promise<number>;
+  lerMidia(empresaId: number, id: number): Promise<Midia | undefined>;
   // empresaId null lista só os donos do sistema.
   listarUsuarios(empresaId: number | null): Promise<Usuario[]>;
   buscarUsuario(login: string): Promise<Usuario | undefined>;
@@ -196,12 +249,16 @@ export function validarCliente(c: NovoCliente): NovoCliente {
       const url = x.url?.trim() ?? '';
       if (!x.nome?.trim()) throw new Error('Toda câmera precisa de um nome');
       if (!/^https?:\/\/\S+$/i.test(url)) throw new Error(`Link da câmera "${x.nome.trim()}" deve começar com http:// ou https://`);
-      return { nome: x.nome.trim(), marca: x.marca?.trim() || undefined, url, ordem: x.ordem || i + 1 };
+      const fotoUrl = x.fotoUrl?.trim() || undefined;
+      if (fotoUrl && !/^https?:\/\/\S+$/i.test(fotoUrl)) throw new Error(`Endereço da foto da câmera "${x.nome.trim()}" deve começar com http:// ou https://`);
+      return { nome: x.nome.trim(), marca: x.marca?.trim() || undefined, url, ...(fotoUrl ? { fotoUrl } : {}), ordem: x.ordem || i + 1 };
     });
   const intervalo = c.intervaloTesteHoras === undefined || c.intervaloTesteHoras === null || (c.intervaloTesteHoras as unknown) === '' ? undefined : Number(c.intervaloTesteHoras);
   if (intervalo !== undefined && !(Number.isInteger(intervalo) && intervalo >= 1 && intervalo <= 720)) throw new Error('Intervalo de teste deve ser de 1 a 720 horas');
   const instrucoes = c.instrucoes?.trim() || undefined;
-  return { ...c, nome, contas, contatos, cameras, instrucoes, intervaloTesteHoras: intervalo };
+  const referencia = c.referencia?.trim() || undefined;
+  const chaves = c.chaves?.trim() || undefined;
+  return { ...c, nome, contas, contatos, cameras, instrucoes, referencia, chaves, intervaloTesteHoras: intervalo };
 }
 
 // Índice em memória conta -> cliente, para a tela não consultar o banco a cada evento.
