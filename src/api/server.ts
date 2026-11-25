@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { parseContactId } from '../protocols/contactId.js';
 import type { AlarmEvent } from '../protocols/types.js';
 import { CONTA_BASE, eventoPrincipal, planoPara, PREFIXO_PASSO, tituloOcorrencia } from '../incidents/planos.js';
-import type { Ocorrencia } from '../incidents/queue.js';
+import { SITUACOES_APOIO, type Ocorrencia, type SituacaoApoio } from '../incidents/queue.js';
+import { buscarFoto, ErroFoto, lerImagemColada } from '../incidents/cameras.js';
 import type { Central } from '../central.js';
 import { conferirSenha, hashSenha, SENHA_MINIMA } from '../auth/senha.js';
 import { Sessoes, type Sessao } from '../auth/sessoes.js';
@@ -16,7 +17,7 @@ import type { Cofre } from '../portaria/cofre.js';
 import { ErroEquipamento, lerEventoEquipamento } from '../portaria/hikvision.js';
 import { lerImportacao, pessoaValida, rotuloUnidade, UnidadeDuplicadaError, type Equipamento, type NovaUnidade, type NovoAtendimento, type Pessoa } from '../portaria/tipos.js';
 import {
-  AJUSTES_PADRAO, ContaDuplicadaError, LoginDuplicadoError, validarAjustes, NaoEncontradoError, RotaDuplicadaError,
+  AJUSTES_PADRAO, bilheteValido, ContaDuplicadaError, LoginDuplicadoError, validarAjustes, NaoEncontradoError, RotaDuplicadaError,
   type Cliente, type NovoCliente, type Papel, type Repositorio, type Rota, type Usuario,
 } from '../store/repositorio.js';
 
@@ -63,17 +64,25 @@ const TESTES: Record<string, { rotulo: string; cid: string }> = {
 
 function clienteResumo(c: Cliente | undefined, completo: boolean) {
   if (!c) return null;
+  const agora = new Date();
   return {
     id: c.id, nome: c.nome, endereco: c.endereco ?? null, tipo: c.tipo ?? null, contatos: c.contatos, instrucoes: c.instrucoes ?? null,
-    // Palavra-chave e contra-senha só vão para quem está atendendo a ocorrência.
+    referencia: c.referencia ?? null, observacoes: c.observacoes ?? null,
+    // Bilhetes ainda válidos: recados que valem para toda ocorrência do cliente.
+    bilhetes: (c.bilhetes ?? []).filter((b) => bilheteValido(b, agora)).map((b) => ({
+      id: b.id, texto: b.texto, autor: b.autor, criadoEm: b.criadoEm.toISOString(), validoAte: b.validoAte ?? null,
+    })),
+    // Palavra-chave, contra-senha e onde ficam as chaves só vão para quem está atendendo a ocorrência.
     palavraChave: completo ? (c.palavraChave ?? null) : null,
     contraSenha: completo ? (c.contraSenha ?? null) : null,
-    // Os links das câmeras podem trazer credenciais: também só para quem atende.
-    cameras: completo ? (c.cameras ?? []) : [],
+    chaves: completo ? (c.chaves ?? null) : null,
+    // Os links das câmeras podem trazer credenciais: também só para quem atende. O endereço da foto nunca sai do servidor.
+    cameras: completo ? (c.cameras ?? []).map((k) => ({ nome: k.nome, marca: k.marca, url: k.url, ordem: k.ordem, temFoto: !!k.fotoUrl })) : [],
   };
 }
 
-function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false) {
+// quem: nome de quem está vendo a tela (vazio = token de serviço, que vê tudo). Dados sigilosos só para quem atende.
+function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false, quem?: string) {
   // O aviso da base não é de cliente: não pede cadastro.
   const cadastrada = o.conta === CONTA_BASE || (comCadastro ? cliente !== undefined : o.contaCadastrada);
   const feitos = new Set(o.acoes.filter((a) => a.descricao.startsWith(PREFIXO_PASSO)).map((a) => a.descricao.slice(PREFIXO_PASSO.length)));
@@ -82,16 +91,24 @@ function resumo(o: Ocorrencia, cliente?: Cliente, comCadastro = false) {
     conta: o.conta,
     // Com o cadastro ligado vale o estado atual: o cliente pode ser cadastrado durante o atendimento.
     contaCadastrada: cadastrada,
-    cliente: clienteResumo(cliente, o.situacao === 'em_atendimento'),
+    cliente: clienteResumo(cliente, o.situacao === 'em_atendimento' && (quem === undefined || quem === o.operador)),
     prioridade: o.prioridade,
     situacao: o.situacao,
     operador: o.operador ?? null,
     abertaEm: o.abertaEm.toISOString(),
+    atendidaEm: o.atendidaEm?.toISOString() ?? null,
     adiadaAte: o.adiadaAte?.toISOString() ?? null,
     motivo: o.motivo ?? null,
     eventos: o.eventos.map((e) => ({
-      em: e.receivedAt, codigo: e.code, descricao: e.description, zona: e.zoneOrUser ?? null, protocolo: e.protocol,
+      em: e.receivedAt, codigo: e.code, descricao: e.description, zona: e.zoneOrUser ?? null, particao: e.partition ?? null, protocolo: e.protocol,
+      restauracao: e.qualifier === 'restore',
     })),
+    // Por onde o evento principal chegou (protocolo, receptora e linha).
+    origem: ((e) => [e.protocol, e.receiver ? `receptora ${e.receiver}` : '', e.line && e.line !== '0' ? `linha ${e.line}` : ''].filter(Boolean).join(' · '))(eventoPrincipal(o)),
+    // Rascunho da conclusão ("Provisionar"), veículo de apoio e fotos anexadas.
+    rascunho: o.rascunho ? { motivo: o.rascunho.motivo ?? '', texto: o.rascunho.texto ?? '', em: o.rascunho.em.toISOString(), operador: o.rascunho.operador } : null,
+    apoio: o.apoio ? { viatura: o.apoio.viatura, situacao: o.apoio.situacao, rotulo: SITUACOES_APOIO[o.apoio.situacao], em: o.apoio.em.toISOString() } : null,
+    midias: (o.midias ?? []).map((m) => ({ id: m.id, em: m.em.toISOString(), operador: m.operador, descricao: m.descricao, url: `/api/midias/${m.id}` })),
     resumo: tituloOcorrencia(o),
     // Disparo (ou falha tão urgente quanto, como jammer): a tela entra em alarme com sirene.
     alarme: ((p) => p.category === 'alarm' || p.priority <= 2)(eventoPrincipal(o)),
@@ -167,12 +184,12 @@ function usuarioPublico(u: Usuario) {
   return { id: u.id, empresaId: u.empresaId, login: u.login, nome: u.nome, papel: u.papel, ativo: u.ativo };
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, max = 64 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > 64 * 1024) throw new Error('Corpo grande demais');
+    if (size > max) throw new Error('Corpo grande demais');
     chunks.push(chunk as Buffer);
   }
   const text = Buffer.concat(chunks).toString('utf8');
@@ -256,7 +273,7 @@ export function createApi(central: Central, opts: ApiOptions): Server {
     if (typeof v !== 'string' || v.length < SENHA_MINIMA) throw new Error(`A senha precisa ter ao menos ${SENHA_MINIMA} caracteres`);
     return v;
   };
-  const resumoDe = (empresaId: number, o: Ocorrencia) => resumo(o, central.clientes(empresaId).porConta(o.conta), true);
+  const resumoDe = (empresaId: number, o: Ocorrencia, quem?: string) => resumo(o, central.clientes(empresaId).porConta(o.conta), true, quem);
   const rotasDe = (v: unknown): Rota[] | undefined => (Array.isArray(v) ? (v as Record<string, unknown>[]).map((r) => ({
     canal: r.canal as Rota['canal'], receptora: String(r.receptora ?? '*'), linha: String(r.linha ?? '*'),
   })) : undefined);
@@ -722,7 +739,7 @@ export function createApi(central: Central, opts: ApiOptions): Server {
       }
 
       if (req.method === 'GET' && url.pathname === '/api/ocorrencias') {
-        return send(res, 200, fila.list().filter((o) => o.situacao !== 'encerrada').map((o) => resumoDe(eid, o)));
+        return send(res, 200, fila.list().filter((o) => o.situacao !== 'encerrada').map((o) => resumoDe(eid, o, q.nome)));
       }
       if (req.method === 'POST' && url.pathname === '/api/operadores') {
         const body = await readJson(req);
@@ -754,12 +771,88 @@ export function createApi(central: Central, opts: ApiOptions): Server {
         if (Number.isNaN(ate.getTime())) throw new Error('Data inválida');
         return send(res, 200, resumoDe(eid, fila.adiar(id, operador, ate)));
       }
+      // ---- Tela de atendimento: rascunho da conclusão, veículo de apoio, bilhetes e fotos das câmeras.
+      const atend = /^\/api\/ocorrencias\/(\d+)\/(provisionar|apoio|bilhetes|fotos)$/.exec(url.pathname);
+      if (req.method === 'POST' && atend) {
+        const body = await readJson(req, atend[2] === 'fotos' ? 5 * 1024 * 1024 : 64 * 1024);
+        const operador = q.nome ?? text(body.operador, 'operador');
+        const id = Number(atend[1]);
+        const o = fila.get(id);
+        if (o.situacao !== 'em_atendimento' || o.operador !== operador) throw new Error('Ocorrência está com outro operador');
+        const opc = (v: unknown) => (typeof v === 'string' ? v : undefined);
+        if (atend[2] === 'provisionar') {
+          return send(res, 200, resumoDe(eid, fila.provisionar(id, operador, opc(body.motivo), opc(body.texto))));
+        }
+        if (atend[2] === 'apoio') {
+          return send(res, 200, resumoDe(eid, fila.apoio(id, operador, String(body.situacao) as SituacaoApoio, opc(body.viatura))));
+        }
+        const cliente = clientes.porConta(o.conta);
+        if (atend[2] === 'bilhetes') {
+          if (!cliente) throw new Error('Conta sem cliente cadastrado');
+          const b = await repo.criarBilhete(eid, cliente.id, { texto: String(body.texto ?? ''), autor: operador, validoAte: opc(body.validoAte) });
+          await clientes.refresh();
+          fila.registrarAcao(id, operador, `Bilhete deixado para o cliente: ${b.texto.slice(0, 120)}`);
+          return send(res, 201, resumoDe(eid, o));
+        }
+        // Foto: da câmera do cliente (o servidor busca) ou colada pelo operador.
+        let foto: { tipo: string; dados: Buffer };
+        let descricao: string;
+        if (body.camera !== undefined && body.camera !== null) {
+          const cam = (cliente?.cameras ?? [])[Number(body.camera)];
+          if (!cam?.fotoUrl) throw new Error('Esta câmera não tem endereço de foto cadastrado');
+          try { foto = await buscarFoto(cam.fotoUrl); } catch (e) { throw new HttpError(502, (e as Error).message); }
+          descricao = `câmera ${cam.nome}`;
+        } else {
+          foto = lerImagemColada(body.imagem);
+          descricao = (opc(body.descricao)?.trim() || 'imagem colada').slice(0, 120);
+        }
+        const midia = await repo.salvarMidia(eid, { ocorrenciaId: id, tipo: foto.tipo, dados: foto.dados });
+        return send(res, 201, resumoDe(eid, fila.anexarMidia(id, operador, midia, descricao)));
+      }
+      // Imagem ao vivo da câmera dentro da ocorrência (só para quem está atendendo, como os links).
+      const fotoCam = /^\/api\/ocorrencias\/(\d+)\/cameras\/(\d+)\/foto$/.exec(url.pathname);
+      if (req.method === 'GET' && fotoCam) {
+        const o = fila.get(Number(fotoCam[1]));
+        if (o.situacao !== 'em_atendimento' || (q.nome && o.operador !== q.nome)) throw new HttpError(403, 'Só quem está atendendo vê as câmeras');
+        const cam = (clientes.porConta(o.conta)?.cameras ?? [])[Number(fotoCam[2])];
+        if (!cam?.fotoUrl) throw new HttpError(404, 'Câmera sem endereço de foto');
+        try {
+          const f = await buscarFoto(cam.fotoUrl);
+          return send(res, 200, f.dados, f.tipo);
+        } catch (e) { throw new HttpError(502, (e as Error).message); }
+      }
+      const midia = /^\/api\/midias\/(\d+)$/.exec(url.pathname);
+      if (req.method === 'GET' && midia) {
+        const m = await repo.lerMidia(eid, Number(midia[1]));
+        if (!m) throw new HttpError(404, 'Foto não encontrada');
+        return send(res, 200, m.dados, m.tipo, { 'content-disposition': `inline; filename="ocorrencia-${m.ocorrenciaId}-foto-${midia[1]}"` });
+      }
+      // Bilhetes do cliente pelo cadastro (administrador).
+      const bil = /^\/api\/clientes\/(\d+)\/bilhetes(?:\/(\d+))?$/.exec(url.pathname);
+      if (bil) {
+        exigirAdmin(q);
+        const cid = Number(bil[1]);
+        if (req.method === 'POST' && !bil[2]) {
+          const body = await readJson(req);
+          const b = await repo.criarBilhete(eid, cid, { texto: String(body.texto ?? ''), autor: q.nome ?? 'Administrador', validoAte: typeof body.validoAte === 'string' ? body.validoAte : undefined });
+          await clientes.refresh();
+          return send(res, 201, b);
+        }
+        if (req.method === 'DELETE' && bil[2]) {
+          await repo.removerBilhete(eid, cid, Number(bil[2]));
+          await clientes.refresh();
+          return send(res, 200, { ok: true });
+        }
+        return send(res, 405, { erro: 'Método não permitido' });
+      }
       if (url.pathname === '/api/clientes' || /^\/api\/clientes\/\d+$/.test(url.pathname)) {
         exigirAdmin(q);
         if (req.method === 'GET' && url.pathname === '/api/clientes') return send(res, 200, await repo.listarClientes(eid));
         const entrada = (b: Record<string, unknown>): NovoCliente => ({
           nome: String(b.nome ?? ''),
           endereco: typeof b.endereco === 'string' ? b.endereco : undefined,
+          referencia: typeof b.referencia === 'string' ? b.referencia : undefined,
+          chaves: typeof b.chaves === 'string' ? b.chaves : undefined,
           tipo: typeof b.tipo === 'string' ? b.tipo : undefined,
           observacoes: typeof b.observacoes === 'string' ? b.observacoes : undefined,
           instrucoes: typeof b.instrucoes === 'string' ? b.instrucoes : undefined,
@@ -768,7 +861,8 @@ export function createApi(central: Central, opts: ApiOptions): Server {
           contraSenha: typeof b.contraSenha === 'string' ? b.contraSenha : undefined,
           contas: Array.isArray(b.contas) ? b.contas.map(String) : [],
           cameras: Array.isArray(b.cameras) ? (b.cameras as Record<string, unknown>[]).map((x, i) => ({
-            nome: String(x.nome ?? ''), marca: typeof x.marca === 'string' ? x.marca : undefined, url: String(x.url ?? ''), ordem: Number(x.ordem) || i + 1,
+            nome: String(x.nome ?? ''), marca: typeof x.marca === 'string' ? x.marca : undefined, url: String(x.url ?? ''),
+            fotoUrl: typeof x.fotoUrl === 'string' ? x.fotoUrl : undefined, ordem: Number(x.ordem) || i + 1,
           })) : [],
           contatos: Array.isArray(b.contatos) ? (b.contatos as Record<string, unknown>[]).map((x, i) => ({
             nome: String(x.nome ?? ''), telefone: typeof x.telefone === 'string' ? x.telefone : undefined, ordem: Number(x.ordem) || i + 1,
@@ -792,6 +886,7 @@ export function createApi(central: Central, opts: ApiOptions): Server {
       if (err instanceof ErroEquipamento) return send(res, 502, { erro: err.message });
       if (err instanceof ContaDuplicadaError || err instanceof LoginDuplicadoError || err instanceof RotaDuplicadaError || err instanceof UnidadeDuplicadaError) return send(res, 409, { erro: err.message });
       if (err instanceof NaoEncontradoError) return send(res, 404, { erro: err.message });
+      if (err instanceof ErroFoto) return send(res, 400, { erro: err.message });
       if (err instanceof SyntaxError) return send(res, 400, { erro: 'JSON inválido' });
       send(res, 400, { erro: (err as Error).message });
     }

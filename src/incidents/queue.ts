@@ -19,7 +19,23 @@ export interface Ocorrencia {
   adiadaAte?: Date;
   eventos: AlarmEvent[];
   acoes: { em: Date; operador?: string; descricao: string }[];
+  // Texto de conclusão salvo sem concluir ("Provisionar"): sobrevive a recarregar a tela e à troca de turno.
+  rascunho?: { motivo?: string; texto?: string; em: Date; operador: string };
+  // Veículo de apoio enviado ao local e em que pé está.
+  apoio?: { viatura: string; situacao: SituacaoApoio; em: Date };
+  // Fotos anexadas (da câmera ou coladas). Os bytes ficam no repositório (salvarMidia).
+  midias?: { id: number; em: Date; operador: string; descricao: string }[];
 }
+
+export type SituacaoApoio = 'acionado' | 'a_caminho' | 'no_local' | 'liberado' | 'cancelado';
+
+export const SITUACOES_APOIO: Record<SituacaoApoio, string> = {
+  acionado: 'acionado',
+  a_caminho: 'a caminho',
+  no_local: 'no local',
+  liberado: 'liberado (local verificado)',
+  cancelado: 'cancelado',
+};
 
 export interface QueueOptions {
   // Empresa dona desta fila (cada empresa tem a sua) e gerador de números de ocorrência, comum a todas.
@@ -227,6 +243,45 @@ export class IncidentQueue {
       .sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.getTime() - b.abertaEm.getTime());
   }
 
+  // Ocorrência que só quem está atendendo pode mexer.
+  private minha(id: number, operador: string): Ocorrencia {
+    const incident = this.get(id);
+    if (incident.situacao !== 'em_atendimento' || incident.operador !== operador) throw new Error('Ocorrência está com outro operador');
+    return incident;
+  }
+
+  // "Provisionar": guarda motivo e texto da conclusão sem encerrar. Vazio apaga o rascunho.
+  provisionar(id: number, operador: string, motivo?: string, texto?: string): Ocorrencia {
+    const incident = this.minha(id, operador);
+    const m = motivo?.trim() || undefined;
+    const t = texto?.trim() || undefined;
+    incident.rascunho = m || t ? { motivo: m, texto: t, em: this.now(), operador } : undefined;
+    this.changed(incident);
+    return incident;
+  }
+
+  // Veículo de apoio: acionar, a caminho, no local, liberado ou cancelado. Cada passo fica no histórico com a hora.
+  apoio(id: number, operador: string, situacao: SituacaoApoio, viatura?: string): Ocorrencia {
+    const incident = this.minha(id, operador);
+    if (!(situacao in SITUACOES_APOIO)) throw new Error('Situação do apoio inválida');
+    const nome = viatura?.trim() || incident.apoio?.viatura;
+    if (!nome) throw new Error('Informe o veículo ou agente de apoio');
+    if (nome.length > 80) throw new Error('Nome do apoio longo demais');
+    incident.apoio = { viatura: nome, situacao, em: this.now() };
+    incident.acoes.push({ em: this.now(), operador, descricao: `Apoio ${nome}: ${SITUACOES_APOIO[situacao]}` });
+    this.changed(incident);
+    return incident;
+  }
+
+  // Foto anexada (os bytes já gravados no repositório com o número midiaId).
+  anexarMidia(id: number, operador: string, midiaId: number, descricao: string): Ocorrencia {
+    const incident = this.minha(id, operador);
+    (incident.midias ??= []).push({ id: midiaId, em: this.now(), operador, descricao });
+    incident.acoes.push({ em: this.now(), operador, descricao: `Foto anexada: ${descricao}` });
+    this.changed(incident);
+    return incident;
+  }
+
   registrarAcao(id: number, operador: string, descricao: string): void {
     const incident = this.get(id);
     incident.acoes.push({ em: this.now(), operador, descricao });
@@ -310,6 +365,7 @@ export class IncidentQueue {
     incident.encerradaEm = this.now();
     incident.motivo = motivo;
     incident.conclusao = conclusao;
+    incident.rascunho = undefined;
     this.changed(incident);
     this.distribute();
     return incident;

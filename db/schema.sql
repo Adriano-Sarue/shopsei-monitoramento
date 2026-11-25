@@ -212,3 +212,33 @@ CREATE INDEX IF NOT EXISTS aberturas_porta_idx ON aberturas_porta (empresa_id, c
 
 -- Regras da fila de cada empresa (tela Configurações).
 ALTER TABLE empresas ADD COLUMN IF NOT EXISTS ajustes JSONB NOT NULL DEFAULT '{}';
+
+-- ---- Atendimento em abas (tela de atendimento web)
+-- Ponto de referência e chaves do local; endereço da foto de cada câmera (o servidor busca, a senha não vai à tela).
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS referencia TEXT;
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS chaves TEXT;
+ALTER TABLE cameras ADD COLUMN IF NOT EXISTS foto_url TEXT;
+-- Rascunho da conclusão, veículo de apoio e fotos anexadas da ocorrência.
+ALTER TABLE ocorrencias ADD COLUMN IF NOT EXISTS extras JSONB NOT NULL DEFAULT '{}';
+
+-- Bilhetes: recados sobre o cliente que aparecem em toda ocorrência dele até a validade.
+CREATE TABLE IF NOT EXISTS bilhetes (
+  id          BIGSERIAL PRIMARY KEY,
+  cliente_id  BIGINT NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  texto       TEXT NOT NULL,
+  autor       TEXT NOT NULL,
+  valido_ate  DATE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS bilhetes_cliente_idx ON bilhetes (cliente_id, criado_em);
+
+-- Fotos anexadas às ocorrências (da câmera ou coladas pelo operador).
+CREATE TABLE IF NOT EXISTS midias (
+  id            BIGSERIAL PRIMARY KEY,
+  empresa_id    BIGINT NOT NULL REFERENCES empresas(id),
+  ocorrencia_id BIGINT NOT NULL,
+  tipo          TEXT NOT NULL,
+  dados         BYTEA NOT NULL,
+  criado_em     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS midias_ocorrencia_idx ON midias (empresa_id, ocorrencia_id);

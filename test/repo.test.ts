@@ -146,6 +146,52 @@ async function contrato(repo: Repositorio): Promise<void> {
   const nova = q2.handleEvent(ev('0099', '1301 00 000'))!;
   assert.ok(nova.id > a.id);
   assert.ok(gravadas.length >= 4);
+
+  // Tela de atendimento: ponto de referência, chaves e foto da câmera no cadastro.
+  const local = await repo.criarCliente(emp.id, {
+    nome: 'Loja Ref', contas: ['0040'], contatos: [], referencia: ' Ao lado da padaria ', chaves: 'Chaveiro preto com o vizinho',
+    cameras: [{ nome: 'Caixa', url: 'https://c.exemplo/2', fotoUrl: 'http://adm:x@10.0.0.5/ISAPI/Streaming/channels/101/picture', ordem: 1 }],
+  });
+  assert.equal(local.referencia, 'Ao lado da padaria');
+  assert.equal(local.chaves, 'Chaveiro preto com o vizinho');
+  assert.equal(local.cameras![0]!.fotoUrl, 'http://adm:x@10.0.0.5/ISAPI/Streaming/channels/101/picture');
+  await assert.rejects(repo.criarCliente(emp.id, { nome: 'F', contas: ['0041'], contatos: [], cameras: [{ nome: 'A', url: 'https://a', fotoUrl: 'ftp://x', ordem: 1 }] }), /foto/);
+
+  // Bilhetes: ficam no cliente, sobrevivem a salvar o cadastro e uma empresa não mexe nos da outra.
+  const bil = await repo.criarBilhete(emp.id, local.id, { texto: '  Dono viajando  ', autor: 'Ana', validoAte: '2026-12-10' });
+  assert.equal(bil.texto, 'Dono viajando');
+  assert.equal(bil.criadoEm instanceof Date, true);
+  await assert.rejects(repo.criarBilhete(emp.id, local.id, { texto: ' ', autor: 'Ana' }), /bilhete/i);
+  await assert.rejects(repo.criarBilhete(emp.id, local.id, { texto: 'x', autor: 'Ana', validoAte: '10/12/2026' }), /Validade/);
+  await assert.rejects(repo.criarBilhete(outra.id, local.id, { texto: 'invasão', autor: 'Zé' }), NaoEncontradoError);
+  await repo.atualizarCliente(emp.id, local.id, { nome: 'Loja Ref', contas: ['0040'], contatos: [] });
+  const comBilhete = (await repo.listarClientes(emp.id)).find((c) => c.id === local.id)!;
+  assert.deepEqual(comBilhete.bilhetes!.map((b) => [b.texto, b.autor, b.validoAte]), [['Dono viajando', 'Ana', '2026-12-10']]);
+  await assert.rejects(repo.removerBilhete(outra.id, local.id, bil.id), NaoEncontradoError);
+  await repo.removerBilhete(emp.id, local.id, bil.id);
+  assert.deepEqual((await repo.listarClientes(emp.id)).find((c) => c.id === local.id)!.bilhetes, []);
+
+  // Fotos das ocorrências: bytes guardados à parte, só a empresa dona lê.
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+  const mid = await repo.salvarMidia(emp.id, { ocorrenciaId: nova.id, tipo: 'image/jpeg', dados: jpeg });
+  const lida = await repo.lerMidia(emp.id, mid);
+  assert.equal(lida!.tipo, 'image/jpeg');
+  assert.equal(lida!.ocorrenciaId, nova.id);
+  assert.deepEqual(Buffer.from(lida!.dados), jpeg);
+  assert.equal(await repo.lerMidia(outra.id, mid), undefined);
+
+  // Rascunho da conclusão, apoio e fotos voltam depois de um reinício.
+  q2.setOperator('Ana', true);
+  q2.provisionar(nova.id, 'Ana', 'Alarme falso', 'Cliente confirmou');
+  q2.apoio(nova.id, 'Ana', 'a_caminho', 'Viatura 12');
+  q2.anexarMidia(nova.id, 'Ana', mid, 'câmera Caixa');
+  await repo.salvarOcorrencia(q2.get(nova.id));
+  const volta = (await repo.carregarOcorrenciasAbertas()).find((o) => o.id === nova.id)!;
+  assert.equal(volta.rascunho!.motivo, 'Alarme falso');
+  assert.equal(volta.rascunho!.em instanceof Date, true);
+  assert.deepEqual([volta.apoio!.viatura, volta.apoio!.situacao], ['Viatura 12', 'a_caminho']);
+  assert.equal(volta.midias![0]!.id, mid);
+  assert.equal(volta.midias![0]!.em instanceof Date, true);
 }
 
 test('repositório em memória cumpre o contrato', async () => {
