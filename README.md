@@ -63,6 +63,27 @@ da Shop Sei ficam em `public/app.css` (variáveis no topo). **Ponha atrás de HT
 - **Falha de energia espera:** falha AC fica `FALHA_ENERGIA_ESPERA_MIN` minutos (padrão 30, 0 desliga) em pendente antes de ir à fila; um disparo na mesma conta traz a ocorrência de volta na hora. Quem conclui é sempre o operador.
 - **Trocar senha:** cada usuário troca a própria em *Senha*.
 
+## Tela de atendimento
+
+A Fila abre com as ocorrências numa barra lateral (Aguardando, Pendente, Em atendimento) e a ocorrência escolhida ocupando o
+resto da tela. O botão *Fila em colunas* mostra a visão geral antiga; clicar numa ocorrência volta para o atendimento.
+
+- **Cabeçalho:** evento, setor (zona), partição, origem, hora e situação; aviso de disparo, de conta não cadastrada e dos
+  bilhetes do cliente. Botões *Apoio*, *Agendar* (escolhe dia e hora) e *Adiar*.
+- **Abas:** *Cliente* (endereço, ponto de referência, chaves, instruções e providências com Atendeu/Não atendeu/Recado),
+  *Alarme* (todos os eventos da ocorrência), *Bilhetes*, *Procedimentos* (plano de ação, registros rápidos, anotação) e *Mídias*.
+- **Bilhetes:** recados sobre o cliente que aparecem em toda ocorrência dele até a validade. O administrador cria e apaga no
+  cadastro do cliente; o operador pode deixar um durante o atendimento.
+- **Câmeras na ocorrência:** a câmera com *endereço da foto* (ex. Hikvision `http://usuario:senha@ip/ISAPI/Streaming/channels/101/picture`)
+  aparece dentro da ocorrência, atualizando a cada 2 s, com o botão 📷 que anexa a foto à ocorrência. O servidor busca a foto
+  (precisa alcançar a câmera pela VPN ou porta liberada); a senha não vai para o navegador. Câmera sem esse endereço continua
+  abrindo o visualizador em janela própria. Também dá para anexar ou colar (Ctrl+V) uma imagem.
+- **Veículo de apoio:** acionado, a caminho, no local, liberado ou cancelado, com a hora de cada passo no histórico.
+- **Conclusão:** palavra-chave e contra-senha ao lado do motivo e do texto. *Provisionar* guarda o texto sem concluir (volta
+  ao recarregar a tela e passa para quem pegar a ocorrência); *Concluir* encerra.
+- Palavra-chave, contra-senha, chaves e câmeras só vão para o operador que está com a ocorrência.
+- Mais de uma ocorrência com você: aparecem como abas no topo.
+
 ## Várias empresas (venda do sistema)
 
 Um servidor atende várias empresas de monitoramento. Cada uma tem a **sua fila, os seus clientes, o seu histórico e

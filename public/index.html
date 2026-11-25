@@ -14,26 +14,47 @@
   <div class="cartao numero"><b id="n-em_atendimento">0</b><span class="mute">Em atendimento</span></div>
   <div class="espaco"></div>
   <span id="feed" class="feed" title="Quando chegou o último evento de qualquer central. Se ficar vermelho, o feed pode ter parado.">Aguardando eventos…</span>
+  <button id="modo" class="sutil" title="Mostra a fila em três colunas, ou volta para a tela de atendimento">Fila em colunas</button>
   <label class="mute" style="margin:0;display:flex;gap:6px;align-items:center"><input id="som" type="checkbox" style="width:auto"> Bip de avisos</label>
   <div class="disp"><span class="bolinha" id="bolinha"></span><span id="estado" class="mute">Indisponível</span><button id="disp" class="principal">Ficar disponível</button></div>
 </div>
 <div id="erro" class="msg erro" style="padding:6px 20px 0"></div>
-<main class="colunas">
-  <section class="coluna"><h2>Aguardando atendimento</h2><div id="aguardando"></div></section>
-  <section class="coluna"><h2>Pendente (adiado ou em espera)</h2><div id="pendente"></div></section>
-  <section class="coluna"><h2>Em atendimento</h2><div id="em_atendimento"></div></section>
+
+<!-- Tela de atendimento: fila na lateral e a ocorrência escolhida ocupando o resto, em abas. -->
+<main id="tela-atendimento" class="atendimento">
+  <aside class="lateral cartao" aria-label="Fila de ocorrências">
+    <details open><summary>Aguardando atendimento <b class="cont" id="l-aguardando-n">0</b></summary><div id="l-aguardando"></div></details>
+    <details open><summary>Pendente <b class="cont" id="l-pendente-n">0</b></summary><div id="l-pendente"></div></details>
+    <details open><summary>Em atendimento <b class="cont" id="l-em_atendimento-n">0</b></summary><div id="l-em_atendimento"></div></details>
+  </aside>
+  <section id="area" class="area"></section>
 </main>
 
-<dialog id="dlg-concluir">
-  <form method="dialog" id="form-concluir">
-    <h3>Concluir ocorrência</h3>
-    <p class="mute" id="dlg-resumo" style="margin:0 0 14px"></p>
-    <label>Motivo <input id="motivo" list="motivos" required placeholder="Ex.: Acionamento indevido">
-      <datalist id="motivos"><option value="Acionamento indevido"><option value="Alarme falso"><option value="Falha de energia do cliente"><option value="Falha de comunicação"><option value="Contato com o cliente realizado"><option value="Providências acionadas"><option value="Cliente confirmou a palavra-chave"><option value="Veículo de apoio verificou o local"><option value="Técnico no local"></datalist>
-    </label>
-    <label>Texto da conclusão (opcional) <textarea id="conclusao" rows="3"></textarea></label>
-    <div id="dlg-erro" class="msg erro"></div>
-    <div class="botoes"><button type="button" id="cancelar">Cancelar</button><button class="principal" type="submit">Concluir</button></div>
+<!-- Fila em colunas: visão geral; clicar numa ocorrência abre a tela de atendimento. -->
+<main id="tela-colunas" class="colunas" hidden>
+  <section class="coluna"><h2>Aguardando atendimento</h2><div id="c-aguardando"></div></section>
+  <section class="coluna"><h2>Pendente (adiado ou em espera)</h2><div id="c-pendente"></div></section>
+  <section class="coluna"><h2>Em atendimento</h2><div id="c-em_atendimento"></div></section>
+</main>
+
+<dialog id="dlg-apoio">
+  <form id="form-apoio">
+    <h3>Veículo de apoio</h3>
+    <p class="mute" id="apoio-resumo" style="margin:0 0 14px"></p>
+    <label>Veículo ou agente <input id="apoio-viatura" list="viaturas" maxlength="80" placeholder="Ex.: Viatura 12 · Carlos"><datalist id="viaturas"></datalist></label>
+    <div class="botoes-apoio" id="apoio-botoes"></div>
+    <div id="apoio-erro" class="msg erro"></div>
+    <div class="botoes"><button type="button" id="apoio-fechar">Fechar</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-agendar">
+  <form id="form-agendar">
+    <h3>Agendar ocorrência</h3>
+    <p class="mute" style="margin:0 0 14px">Sai da sua tela e volta para a fila na hora marcada.</p>
+    <label>Voltar à fila em <input id="agendar-em" type="datetime-local" required></label>
+    <div id="agendar-erro" class="msg erro"></div>
+    <div class="botoes"><button type="button" id="agendar-cancelar">Cancelar</button><button class="marca-btn" type="submit">Agendar</button></div>
   </form>
 </dialog>
 
@@ -41,7 +62,14 @@
 <script>
 const store = { get: (k) => { try { return localStorage.getItem(k) || ''; } catch { return ''; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* sem armazenamento */ } } };
 const NIVEIS = { 1: 'Crítico', 2: 'Alto', 3: 'Médio', 4: 'Baixo' };
-let eu, disponivel = false, conhecidas = null, concluindo = null, ultimaLista = [];
+const SITUACOES = ['aguardando', 'pendente', 'em_atendimento'];
+const ABAS = [['cliente', 'Cliente'], ['alarme', 'Alarme'], ['bilhetes', 'Bilhetes'], ['procedimentos', 'Procedimentos'], ['midias', 'Mídias']];
+const APOIO = [['acionado', 'Acionado'], ['a_caminho', 'A caminho'], ['no_local', 'No local'], ['liberado', 'Liberado'], ['cancelado', 'Cancelar apoio']];
+const ACOES_RAPIDAS = ['Cliente confirmou a palavra-chave', 'Palavra-chave errada', 'Técnico no local'];
+let eu, disponivel = false, conhecidas = null, ultimaLista = [];
+let selId = Number(store.get('sel')) || null, aba = store.get('aba') || 'cliente', modo = store.get('modo') === 'colunas' ? 'colunas' : 'lado';
+// Partes da tela da ocorrência que não são redesenhadas a cada atualização (campos que o operador está digitando).
+let tela = null;
 $('som').checked = store.get('som') !== '0';
 $('som').onchange = () => store.set('som', $('som').checked ? '1' : '0');
 
@@ -52,114 +80,397 @@ function bip() {
     o.connect(g); g.connect(ctx.destination); o.frequency.value = 880; g.gain.value = 0.15; o.start(); o.stop(ctx.currentTime + 0.35);
   } catch { /* navegador bloqueou o áudio */ }
 }
-
 function aviso(texto) { $('erro').textContent = texto; }
+function dataHora(iso) { return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+function dataBr(d) { const [a, m, dia] = d.split('-'); return dia + '/' + m + '/' + a; }
+function minha(o) { return o.situacao === 'em_atendimento' && o.operador === eu.nome; }
+function selecionada() { return ultimaLista.find((o) => o.id === selId); }
 
-// "Ciente" no disparo: já abre a primeira câmera do cliente numa janela pop-up (precisa ser no clique, senão o
-// navegador bloqueia a janela); as outras ficam nos botões do pop-up e do cartão.
+async function enviar(o, acao, corpo) {
+  try { await api('/api/ocorrencias/' + o.id + '/' + acao, { method: 'POST', body: JSON.stringify(corpo) }); await load(); return true; } catch (e) { aviso(e.message); toast(e.message); return false; }
+}
+function anotar(o, descricao) { return enviar(o, 'acoes', { descricao }); }
+
+// "Ciente" no disparo: abre a ocorrência na tela e já abre a primeira câmera do cliente numa janela pop-up (precisa
+// ser no clique, senão o navegador bloqueia a janela).
 function cienteDoDisparo(o) {
+  selecionar(o.id);
   const cam = o.cliente && o.cliente.cameras && o.cliente.cameras[0];
-  if (cam) abrirCamera(cam, 0);
-  return anotar(o, 'Ciente do disparo, iniciando atendimento' + (cam ? ' (câmera ' + cam.nome + ' aberta)' : ''));
-}
-const ACOES_RAPIDAS = ['Cliente confirmou a palavra-chave', 'Veículo de apoio a caminho', 'Técnico no local'];
-const rascunhos = {};
-
-async function anotar(o, descricao) {
-  try { await api('/api/ocorrencias/' + o.id + '/acoes', { method: 'POST', body: JSON.stringify({ descricao }) }); await load(); return true; } catch (e) { aviso(e.message); return false; }
+  if (cam && !cam.temFoto) abrirCamera(cam, 0);
+  return anotar(o, 'Ciente do disparo, iniciando atendimento' + (cam ? ' (câmera ' + cam.nome + (cam.temFoto ? ' na tela' : ' aberta') + ')' : ''));
 }
 
-function card(o, nova) {
+function selecionar(id) {
+  selId = id; store.set('sel', String(id));
+  if (modo !== 'lado') trocarModo('lado');
+  desenhar();
+}
+
+function trocarModo(m) {
+  modo = m; store.set('modo', m);
+  $('tela-atendimento').hidden = m !== 'lado'; $('tela-colunas').hidden = m !== 'colunas';
+  $('modo').textContent = m === 'lado' ? 'Fila em colunas' : 'Tela de atendimento';
+}
+$('modo').onclick = () => { trocarModo(modo === 'lado' ? 'colunas' : 'lado'); desenhar(); };
+
+// Item da fila (lateral e colunas): faixa da prioridade, conta, cliente, evento e tempo.
+function item(o, nova, grande) {
   const p = Math.min(o.prioridade, 4);
-  const c = el('div', 'cartao ocorrencia p' + p + (nova ? ' nova' : '') + (o.alarme && o.situacao !== 'pendente' ? ' disparo' : ''));
-  const l1 = el('div', 'linha');
-  l1.append(el('span', 'titulo', rotuloConta(o)), el('span', 'selo p' + p, NIVEIS[p]));
-  c.append(l1);
-  const l2 = el('div', 'linha'); l2.append(el('span', '', o.resumo), el('span', 'mute', haQuanto(o.abertaEm))); c.append(l2);
-  if (!o.contaCadastrada) c.append(el('div', 'aviso', 'Conta não cadastrada'));
-  if (o.cliente && o.cliente.endereco) c.append(el('div', 'mute', o.cliente.endereco));
-  if (o.cliente && o.situacao === 'em_atendimento') {
-    if (o.cliente.palavraChave || o.cliente.contraSenha) c.append(el('div', 'chaves', 'Palavra-chave: ' + (o.cliente.palavraChave || '-') + '  ·  Contra-senha: ' + (o.cliente.contraSenha || '-')));
-    if (o.cliente.cameras && o.cliente.cameras.length) {
-      const cams = el('div', 'cameras');
-      o.cliente.cameras.forEach((cam, i) => { const a = el('a', '', '📹 ' + cam.nome + (cam.marca ? ' · ' + cam.marca : '')); a.href = cam.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.onclick = (ev) => { if (abrirCamera(cam, i)) ev.preventDefault(); }; cams.append(a); });
-      c.append(cams);
-    }
-    if (o.cliente.instrucoes) { const ins = el('div', 'instrucoes'); ins.append(el('strong', '', 'Instruções do cliente: '), document.createTextNode(o.cliente.instrucoes)); c.append(ins); }
-    if (o.cliente.contatos.length) {
-      const d = el('div', 'providencias');
-      for (const ct of o.cliente.contatos) {
-        const linha = el('div', 'contato');
-        const nome = el('span', '', ct.ordem + '. ' + ct.nome + (ct.telefone ? ' · ' : ''));
-        if (ct.telefone) { const a = el('a', '', ct.telefone); a.href = 'tel:' + ct.telefone.replace(/[^\d+]/g, ''); nome.append(a); }
-        linha.append(nome);
-        if (o.operador === eu.nome) {
-          const bs = el('span', 'ligacao');
-          for (const [rotulo, texto] of [['Atendeu', 'atendeu'], ['Não atendeu', 'não atendeu'], ['Recado', 'deixei recado']]) {
-            const b = el('button', 'mini', rotulo);
-            b.onclick = () => anotar(o, 'Ligação para ' + ct.nome + (ct.telefone ? ' · ' + ct.telefone : '') + ': ' + texto);
-            bs.append(b);
-          }
-          linha.append(bs);
-        }
-        d.append(linha);
-      }
-      c.append(d);
-    }
-  }
-  if (o.situacao === 'em_atendimento' && o.operador === eu.nome) {
-    const pl = el('div', 'plano');
-    pl.append(el('div', 'rotulo', 'Plano de ação'));
-    for (const item of o.plano) {
-      const l = el('label', 'passo' + (item.feito ? ' feito' : ''));
-      const cb = el('input'); cb.type = 'checkbox'; cb.checked = item.feito; cb.disabled = item.feito;
-      cb.onchange = () => anotar(o, 'Passo concluído: ' + item.passo);
-      l.append(cb, document.createTextNode(' ' + item.passo));
-      pl.append(l);
-    }
-    c.append(pl);
-    // Registros rápidos do atendimento: um clique grava a ação com hora e operador.
-    const rapidas = el('div', 'rapidas');
-    for (const texto of ACOES_RAPIDAS) {
-      const feito = o.acoes.some((a) => a.descricao === texto);
-      const b = el('button', 'mini' + (feito ? ' feito' : ''), (feito ? '✓ ' : '') + texto); b.type = 'button';
-      b.onclick = () => anotar(o, texto);
-      rapidas.append(b);
-    }
-    c.append(rapidas);
-    const nota = el('form', 'nota');
-    const campo = el('input'); campo.placeholder = 'Anotar (ex.: polícia acionada, viatura 12)'; campo.maxLength = 500;
-    campo.value = rascunhos[o.id] || ''; campo.dataset.ocorrencia = o.id;
-    campo.oninput = () => { rascunhos[o.id] = campo.value; };
-    const ok = el('button', '', 'Anotar'); ok.type = 'submit';
-    nota.onsubmit = (ev) => { ev.preventDefault(); if (campo.value.trim()) anotar(o, campo.value.trim()).then((feito) => { if (feito) delete rascunhos[o.id]; }); };
-    nota.append(campo, ok); c.append(nota);
-  }
-  if (o.acoes.length) {
-    const h = el('ul', 'historico-acoes');
-    for (const a of o.acoes.slice(-5)) h.append(el('li', '', hora(a.em) + ' · ' + (a.operador ? a.operador + ': ' : '') + a.descricao));
-    c.append(h);
-  }
-  const ev = el('ul', 'eventos');
-  for (const e of o.eventos.slice(-4)) ev.append(el('li', '', hora(e.em) + ' · ' + e.codigo + ' ' + e.descricao + (e.zona ? ' · zona ' + e.zona : '')));
-  c.append(ev);
-  if (o.operador) c.append(el('div', 'mute', 'Operador: ' + o.operador));
-  if (o.adiadaAte) c.append(el('div', 'mute', 'Volta à fila às ' + hora(o.adiadaAte)));
-  if (o.situacao === 'em_atendimento' && o.operador === eu.nome) {
-    const a = el('div', 'acoes');
-    const concluir = el('button', 'principal', 'Concluir');
-    concluir.onclick = () => { concluindo = o; $('dlg-resumo').textContent = rotuloConta(o) + ' · ' + o.resumo; $('motivo').value = ''; $('conclusao').value = ''; $('dlg-erro').textContent = ''; $('dlg-concluir').showModal(); $('motivo').focus(); };
-    const adiar = el('select'); adiar.style.width = 'auto';
-    adiar.append(new Option('Adiar…', ''), new Option('15 minutos', '15'), new Option('30 minutos', '30'), new Option('1 hora', '60'));
-    adiar.onchange = async () => {
-      if (!adiar.value) return;
-      try { await api('/api/ocorrencias/' + o.id + '/adiar', { method: 'POST', body: JSON.stringify({ ate: new Date(Date.now() + Number(adiar.value) * 60000).toISOString() }) }); toast('Ocorrência adiada'); load(); } catch (e) { aviso(e.message); adiar.value = ''; }
-    };
-    a.append(concluir, adiar); c.append(a);
-  }
-  return c;
+  const b = el('button', 'item-fila p' + p + (o.id === selId && modo === 'lado' ? ' sel' : '') + (nova ? ' nova' : '') + (o.alarme && o.situacao !== 'pendente' ? ' disparo' : '') + (grande ? ' grande' : ''));
+  b.type = 'button';
+  const l1 = el('span', 'l1'); l1.append(el('strong', '', o.conta === CONTA_BASE ? 'Base da empresa' : o.conta + (o.cliente ? ' · ' + o.cliente.nome : '')), el('span', 'mute', haQuanto(o.abertaEm)));
+  const l2 = el('span', 'l2', o.resumo);
+  const l3 = el('span', 'l3 mute');
+  const partes = [];
+  if (!o.contaCadastrada) partes.push('Conta não cadastrada');
+  if (o.operador) partes.push((o.operador === eu.nome ? 'Com você' : o.operador));
+  if (o.adiadaAte) partes.push('volta às ' + hora(o.adiadaAte));
+  if (o.apoio && !['liberado', 'cancelado'].includes(o.apoio.situacao)) partes.push('🚗 ' + o.apoio.rotulo);
+  if (o.cliente && o.cliente.bilhetes.length) partes.push('📌 ' + o.cliente.bilhetes.length);
+  if (o.midias.length) partes.push('📷 ' + o.midias.length);
+  l3.textContent = partes.join(' · ');
+  b.append(l1, l2); if (partes.length) b.append(l3);
+  if (grande && o.cliente && o.cliente.endereco) b.append(el('span', 'l3 mute', o.cliente.endereco));
+  b.onclick = () => selecionar(o.id);
+  return b;
 }
 
+// ---------- Tela da ocorrência ----------
+function campo(rotulo, valor) { const d = el('div', 'campo'); d.append(el('span', 'rot', rotulo), el('span', 'val', valor || '—')); return d; }
+function principal(o) { return [...o.eventos].reverse().find((e) => !e.restauracao) || o.eventos[o.eventos.length - 1] || {}; }
+
+function montarTela(o) {
+  if (tela) clearInterval(tela.timerCam);
+  const raiz = el('div', 'oc');
+  const abasOc = el('div', 'abas-oc');
+  const cab = el('header', 'cab-oc cartao');
+  const corpo = el('div', 'corpo-oc');
+  const painel = el('div', 'painel-oc cartao');
+  const nav = el('nav', 'abas'); nav.setAttribute('role', 'tablist');
+  const conteudo = el('div', 'aba-conteudo');
+  const fixo = el('div', 'aba-fixo');
+  painel.append(nav, conteudo, fixo);
+  const lado = el('aside', 'lado-oc');
+  const cams = el('div', 'cartao bloco'); const apoio = el('div', 'cartao bloco'); const linha = el('div', 'cartao bloco');
+  lado.append(cams, apoio, linha);
+  corpo.append(painel, lado);
+  raiz.append(abasOc, cab, corpo);
+  tela = { id: o.id, raiz, abasOc, cab, nav, conteudo, fixo, cams, apoio, linha, sig: {}, formularios: {}, timerCam: null };
+  if (minha(o)) {
+    tela.formularios = montarFormularios(o);
+    raiz.append(tela.formularios.rodape);
+  }
+  $('area').replaceChildren(raiz);
+}
+
+// Campos que o operador digita: criados uma vez por ocorrência (a atualização da fila não apaga o que está escrito).
+function montarFormularios(o) {
+  // Anotação livre (aba Procedimentos)
+  const nota = el('form', 'nota');
+  const notaCampo = el('input'); notaCampo.placeholder = 'Anotar (ex.: polícia acionada, viatura 12)'; notaCampo.maxLength = 500;
+  const notaOk = el('button', '', 'Anotar'); notaOk.type = 'submit';
+  nota.onsubmit = (ev) => { ev.preventDefault(); const t = notaCampo.value.trim(); if (t) anotar(o, t).then((ok) => { if (ok) notaCampo.value = ''; }); };
+  nota.append(notaCampo, notaOk);
+  // Novo bilhete (aba Bilhetes)
+  const bil = el('form', 'novo-bilhete');
+  const bilTexto = el('input'); bilTexto.placeholder = 'Deixar bilhete para as próximas ocorrências deste cliente'; bilTexto.maxLength = 1000;
+  const bilAte = el('input'); bilAte.type = 'date'; bilAte.title = 'Vale até (opcional)';
+  const bilOk = el('button', '', 'Deixar bilhete'); bilOk.type = 'submit';
+  bil.onsubmit = (ev) => {
+    ev.preventDefault(); if (!bilTexto.value.trim()) return;
+    enviar(o, 'bilhetes', { texto: bilTexto.value, validoAte: bilAte.value || undefined }).then((ok) => { if (ok) { bilTexto.value = ''; bilAte.value = ''; toast('Bilhete deixado'); } });
+  };
+  bil.append(bilTexto, bilAte, bilOk);
+  // Anexar imagem (aba Mídias): arquivo ou Ctrl+V
+  const anexo = el('div', 'anexar');
+  const arq = el('input'); arq.type = 'file'; arq.accept = 'image/*'; arq.id = 'arquivo-foto'; arq.hidden = true;
+  const escolher = el('label', 'botao-arquivo', '📎 Anexar imagem'); escolher.htmlFor = 'arquivo-foto';
+  arq.onchange = () => { if (arq.files[0]) anexarImagem(o, arq.files[0], arq.files[0].name); arq.value = ''; };
+  anexo.append(arq, escolher, el('span', 'mute', 'ou cole uma imagem aqui com Ctrl+V (print da câmera, foto do celular)'));
+  // Rodapé: palavra-chave e contra-senha ao lado da conclusão, com Provisionar (salvar sem concluir) e Concluir.
+  const rodape = el('footer', 'conclusao cartao');
+  const chaves = el('div', 'senhas');
+  const motivo = el('input'); motivo.setAttribute('list', 'motivos'); motivo.placeholder = 'Motivo (ex.: Acionamento indevido)'; motivo.id = 'motivo';
+  const lista = el('datalist'); lista.id = 'motivos';
+  for (const m of ['Acionamento indevido', 'Alarme falso', 'Falha de energia do cliente', 'Falha de comunicação', 'Contato com o cliente realizado', 'Providências acionadas', 'Cliente confirmou a palavra-chave', 'Veículo de apoio verificou o local', 'Técnico no local']) lista.append(new Option(m));
+  const texto = el('textarea'); texto.rows = 2; texto.placeholder = 'Texto da conclusão'; texto.id = 'conclusao';
+  if (o.rascunho) { motivo.value = o.rascunho.motivo; texto.value = o.rascunho.texto; }
+  const salvo = el('span', 'mute salvo');
+  const prov = el('button', '', 'Provisionar'); prov.type = 'button'; prov.title = 'Guarda o texto sem concluir (vale para quem pegar a ocorrência depois)';
+  prov.onclick = () => enviar(o, 'provisionar', { motivo: motivo.value, texto: texto.value }).then((ok) => ok && toast('Conclusão provisionada'));
+  const concluir = el('button', 'principal', 'Concluir'); concluir.type = 'button';
+  concluir.onclick = async () => {
+    if (!motivo.value.trim()) { motivo.focus(); toast('Informe o motivo para concluir'); return; }
+    if (await enviar(o, 'concluir', { motivo: motivo.value, conclusao: texto.value })) toast('Ocorrência concluída');
+  };
+  const cmp = el('div', 'campos-conclusao'); cmp.append(motivo, lista, texto);
+  const bts = el('div', 'botoes-conclusao'); bts.append(salvo, prov, concluir);
+  rodape.append(chaves, cmp, bts);
+  return { nota, bil, anexo, rodape, chaves, salvo, motivo, texto };
+}
+
+// Imagem grande (foto do celular) é reduzida antes de enviar: até 1600 px, JPEG.
+function anexarImagem(o, arquivo, descricao) {
+  if (!/^image\//.test(arquivo.type)) { toast('Use uma imagem'); return; }
+  const img = new Image(); const url = URL.createObjectURL(arquivo);
+  img.onload = () => {
+    const f = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const c = document.createElement('canvas'); c.width = Math.round(img.width * f); c.height = Math.round(img.height * f);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+    enviar(o, 'fotos', { imagem: c.toDataURL('image/jpeg', 0.85), descricao }).then((ok) => ok && toast('Imagem anexada'));
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); toast('Não foi possível ler a imagem'); };
+  img.src = url;
+}
+document.addEventListener('paste', (ev) => {
+  const o = selecionada(); if (!o || !minha(o) || aba !== 'midias') return;
+  const f = [...(ev.clipboardData ? ev.clipboardData.items : [])].find((i) => i.type.startsWith('image/'));
+  if (f) { ev.preventDefault(); anexarImagem(o, f.getAsFile(), 'imagem colada'); }
+});
+
+function mudou(parte, valor) { const s = JSON.stringify(valor); if (tela.sig[parte] === s) return false; tela.sig[parte] = s; return true; }
+
+function desenharOcorrencia(o) {
+  if (!tela || tela.id !== o.id || !!tela.formularios.rodape !== minha(o)) montarTela(o);
+  const meu = minha(o);
+  // Abas das ocorrências que estão com você (atendimento múltiplo)
+  const minhas = ultimaLista.filter(minha).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));
+  if (mudou('abasOc', [minhas.map((x) => [x.id, x.conta, x.alarme]), o.id])) {
+    tela.abasOc.replaceChildren(...minhas.map((x) => {
+      const b = el('button', 'aba-oc' + (x.id === o.id ? ' ativa' : '') + (x.alarme ? ' alarme' : ''), (x.alarme ? '🚨 ' : '') + x.conta + (x.cliente ? ' · ' + x.cliente.nome : ''));
+      b.type = 'button'; b.onclick = () => selecionar(x.id); return b;
+    }));
+    tela.abasOc.hidden = minhas.length < 2 && meu;
+  }
+  // Cabeçalho
+  const ev = principal(o);
+  if (mudou('cab', [o.resumo, o.prioridade, o.situacao, o.operador, o.alarme, o.contaCadastrada, ev, o.origem, o.cliente && o.cliente.bilhetes.length, o.adiadaAte, meu])) {
+    const p = Math.min(o.prioridade, 4);
+    const t = el('div', 'titulo-oc');
+    t.append(el('h2', '', rotuloConta(o)), el('span', 'selo p' + p, NIVEIS[p]));
+    const campos = el('div', 'campos');
+    campos.append(campo('Evento', (ev.codigo ? ev.codigo + ' · ' : '') + o.resumo), campo('Setor', ev.zona ? 'zona ' + ev.zona : ''), campo('Partição', ev.particao), campo('Origem', o.origem), campo('Aberta', dataHora(o.abertaEm)),
+      campo('Situação', o.situacao === 'em_atendimento' ? 'Em atendimento · ' + (o.operador === eu.nome ? 'você' : o.operador) : o.situacao === 'pendente' ? 'Pendente' + (o.adiadaAte ? ' até ' + hora(o.adiadaAte) : '') : 'Aguardando'));
+    const acoes = el('div', 'acoes-oc');
+    if (meu) {
+      const ap = el('button', '', '🚗 Apoio'); ap.onclick = () => abrirApoio(o);
+      const ag = el('button', '', '🗓 Agendar'); ag.onclick = () => abrirAgendar(o);
+      const ad = el('select', 'adiar'); ad.append(new Option('⏱ Adiar…', ''), new Option('15 minutos', '15'), new Option('30 minutos', '30'), new Option('1 hora', '60'));
+      ad.onchange = async () => { if (!ad.value) return; const ok = await enviar(o, 'adiar', { ate: new Date(Date.now() + Number(ad.value) * 60000).toISOString() }); if (ok) toast('Ocorrência adiada'); else ad.value = ''; };
+      acoes.append(ap, ag, ad);
+    }
+    const avisos = [];
+    if (o.alarme) avisos.push(el('div', 'faixa-oc alerta', '⚠ ' + (/p[aâ]nico|coa[cç][aã]o/i.test(o.resumo) ? 'Pânico' : 'Disparo') + ': esta ocorrência exige atenção imediata'));
+    if (!o.contaCadastrada) avisos.push(el('div', 'faixa-oc alerta', 'Conta não cadastrada: confira o código da central'));
+    if (o.cliente && o.cliente.bilhetes.length) { const f = el('button', 'faixa-oc bilhete', '📌 ' + o.cliente.bilhetes.length + (o.cliente.bilhetes.length > 1 ? ' bilhetes' : ' bilhete') + ' deste cliente: ' + o.cliente.bilhetes[o.cliente.bilhetes.length - 1].texto); f.type = 'button'; f.onclick = () => trocarAba('bilhetes'); avisos.push(f); }
+    if (!meu) avisos.push(el('div', 'faixa-oc', o.situacao === 'em_atendimento' ? 'Em atendimento com ' + o.operador + '. Só quem atende vê palavra-chave, chaves e câmeras.' : 'Esta ocorrência ainda não está com você. Fique disponível para receber da fila.'));
+    const topo = el('div', 'topo-oc'); topo.append(t, acoes);
+    tela.cab.replaceChildren(topo, campos, ...avisos);
+  }
+  // Abas
+  const contagem = { bilhetes: o.cliente ? o.cliente.bilhetes.length : 0, midias: o.midias.length, alarme: o.eventos.length };
+  if (mudou('nav', [aba, contagem])) {
+    tela.nav.replaceChildren(...ABAS.map(([k, rot]) => {
+      const b = el('button', 'aba' + (aba === k ? ' ativa' : ''), rot); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(aba === k));
+      if (contagem[k]) b.append(el('span', 'cont', String(contagem[k])));
+      b.onclick = () => trocarAba(k); return b;
+    }));
+  }
+  if (mudou('conteudo', [aba, o, eu.nome])) tela.conteudo.replaceChildren(...conteudoAba(o, meu));
+  if (meu) {
+    const f = tela.formularios;
+    const fixo = { procedimentos: f.nota, bilhetes: o.cliente ? f.bil : null, midias: f.anexo }[aba];
+    if (tela.fixo.firstChild !== fixo) tela.fixo.replaceChildren(...(fixo ? [fixo] : []));
+    const ch = o.cliente ? [['Palavra-chave', o.cliente.palavraChave], ['Contra-senha', o.cliente.contraSenha]] : [];
+    if (mudou('senhas', ch)) f.chaves.replaceChildren(...ch.map(([r, v]) => { const d = el('div'); d.append(el('span', 'rot', r), el('strong', '', v || '—')); return d; }));
+    if (mudou('rascunho', o.rascunho)) f.salvo.textContent = o.rascunho ? 'Provisionado por ' + o.rascunho.operador + ' às ' + hora(o.rascunho.em) : '';
+  } else tela.fixo.replaceChildren();
+  desenharCameras(o, meu);
+  if (mudou('apoio', [o.apoio, meu])) desenharApoio(o, meu);
+  if (mudou('linha', [o.eventos.length, o.acoes.length])) desenharLinha(o);
+}
+
+function trocarAba(k) { aba = k; store.set('aba', k); const o = selecionada(); if (o) desenharOcorrencia(o); }
+
+function secao(titulo, ...filhos) { const s = el('section', 'secao'); s.append(el('h3', '', titulo), ...filhos); return s; }
+
+function conteudoAba(o, meu) {
+  const c = o.cliente;
+  if (aba === 'cliente') {
+    if (o.conta === CONTA_BASE) return [el('p', '', 'Aviso da própria base: internet da empresa ou ponte do Active Net.')];
+    if (!c) return [el('div', 'vazio', 'Conta ' + o.conta + ' não está cadastrada. Cadastre em Clientes para ver os dados aqui.')];
+    const dados = el('div', 'campos');
+    dados.append(campo('Cliente', c.nome), campo('Tipo', c.tipo), campo('Endereço', c.endereco), campo('Ponto de referência', c.referencia));
+    if (meu) dados.append(campo('Chaves', c.chaves));
+    const out = [secao('Dados do cliente', dados)];
+    if (c.instrucoes) { const i = el('div', 'instrucoes'); i.append(el('strong', '', 'Instruções: '), document.createTextNode(c.instrucoes)); out.push(i); }
+    if (c.observacoes) out.push(el('p', 'mute', 'Observações: ' + c.observacoes));
+    const prov = el('div', 'providencias');
+    for (const ct of c.contatos) {
+      const l = el('div', 'contato');
+      const nome = el('span', '', ct.ordem + '. ' + ct.nome + (ct.telefone ? ' · ' : ''));
+      if (ct.telefone) { const a = el('a', '', ct.telefone); a.href = 'tel:' + ct.telefone.replace(/[^\d+]/g, ''); nome.append(a); }
+      l.append(nome);
+      if (meu) {
+        const bs = el('span', 'ligacao');
+        for (const [rot, txt] of [['Atendeu', 'atendeu'], ['Não atendeu', 'não atendeu'], ['Recado', 'deixei recado']]) {
+          const b = el('button', 'mini', rot); b.type = 'button'; b.onclick = () => anotar(o, 'Ligação para ' + ct.nome + (ct.telefone ? ' · ' + ct.telefone : '') + ': ' + txt); bs.append(b);
+        }
+        l.append(bs);
+      }
+      prov.append(l);
+    }
+    out.push(secao('Providências (ordem de ligação)', c.contatos.length ? prov : el('p', 'mute', 'Nenhuma providência cadastrada.')));
+    return out;
+  }
+  if (aba === 'alarme') {
+    const t = el('table');
+    const cab = el('tr'); for (const h of ['Hora', 'Código', 'Evento', 'Zona', 'Partição']) cab.append(el('th', '', h));
+    t.append(cab);
+    for (const e of [...o.eventos].reverse()) {
+      const tr = el('tr', e.restauracao ? 'restauracao' : '');
+      tr.append(el('td', '', dataHora(e.em)), el('td', '', e.codigo), el('td', '', e.descricao), el('td', '', e.zona || '—'), el('td', '', e.particao || '—'));
+      t.append(tr);
+    }
+    const w = el('div', 'tabela'); w.append(t);
+    return [secao('Eventos recebidos nesta ocorrência', w)];
+  }
+  if (aba === 'bilhetes') {
+    if (!c) return [el('div', 'vazio', 'Sem cliente cadastrado, não há bilhetes.')];
+    const lista = c.bilhetes.length ? c.bilhetes.slice().reverse().map((b) => {
+      const d = el('div', 'bilhete'); d.append(el('div', '', b.texto), el('div', 'mute', b.autor + ' · ' + dataHora(b.criadoEm) + (b.validoAte ? ' · vale até ' + dataBr(b.validoAte) : ''))); return d;
+    }) : [el('p', 'mute', 'Nenhum bilhete. Bilhetes aparecem em toda ocorrência deste cliente até a validade.')];
+    return [secao('Bilhetes do cliente', ...lista)];
+  }
+  if (aba === 'procedimentos') {
+    const out = [];
+    if (c && c.instrucoes) { const i = el('div', 'instrucoes'); i.append(el('strong', '', 'Instruções do cliente: '), document.createTextNode(c.instrucoes)); out.push(i); }
+    const pl = el('div', 'plano');
+    for (const it of o.plano) {
+      const l = el('label', 'passo' + (it.feito ? ' feito' : ''));
+      const cb = el('input'); cb.type = 'checkbox'; cb.checked = it.feito; cb.disabled = it.feito || !meu;
+      cb.onchange = () => anotar(o, 'Passo concluído: ' + it.passo);
+      l.append(cb, document.createTextNode(' ' + it.passo)); pl.append(l);
+    }
+    out.push(secao('Plano de ação', pl));
+    if (meu) {
+      const r = el('div', 'rapidas');
+      for (const txt of ACOES_RAPIDAS) {
+        const feito = o.acoes.some((a) => a.descricao === txt);
+        const b = el('button', 'mini' + (feito ? ' feito' : ''), (feito ? '✓ ' : '') + txt); b.type = 'button'; b.onclick = () => anotar(o, txt); r.append(b);
+      }
+      out.push(secao('Registros rápidos', r));
+    }
+    return out;
+  }
+  // Mídias
+  if (!o.midias.length) return [el('div', 'vazio', meu ? 'Nenhuma foto ainda. Use 📷 nas câmeras ao lado, anexe ou cole uma imagem.' : 'Nenhuma foto anexada.')];
+  const g = el('div', 'galeria');
+  for (const m of o.midias.slice().reverse()) {
+    const a = el('a', 'midia'); a.href = m.url; a.target = '_blank'; a.rel = 'noopener';
+    const img = el('img'); img.src = m.url; img.alt = m.descricao; img.loading = 'lazy';
+    a.append(img, el('span', 'mute', hora(m.em) + ' · ' + m.operador + ' · ' + m.descricao));
+    g.append(a);
+  }
+  return [secao('Fotos da ocorrência', g)];
+}
+
+// Câmeras dentro da ocorrência: com endereço de foto, a imagem atualiza sozinha a cada 2 s; sem ele, botão para abrir.
+function desenharCameras(o, meu) {
+  const cams = (o.cliente && o.cliente.cameras) || [];
+  if (!mudou('cams', [cams, meu])) return;
+  clearInterval(tela.timerCam);
+  const h = el('h3', '', 'Câmeras');
+  if (!meu || !cams.length) { tela.cams.replaceChildren(h, el('p', 'mute', meu ? 'Cliente sem câmera cadastrada.' : 'Aparecem para quem está atendendo.')); return; }
+  const grade = el('div', 'grade-cams');
+  const imgs = [];
+  cams.forEach((cam, i) => {
+    const t = el('div', 'cam');
+    if (cam.temFoto) {
+      const img = el('img'); img.alt = cam.nome; img.dataset.base = '/api/ocorrencias/' + o.id + '/cameras/' + i + '/foto';
+      img.src = img.dataset.base + '?t=' + Date.now();
+      img.onerror = () => { t.classList.add('sem-imagem'); };
+      img.onload = () => { t.classList.remove('sem-imagem'); };
+      img.onclick = () => abrirCamera(cam, i);
+      imgs.push(img); t.append(img, el('span', 'sem', 'Sem imagem da câmera'));
+    } else t.append(el('span', 'sem visivel', 'Câmera sem imagem na tela'));
+    const barra = el('div', 'barra-cam');
+    barra.append(el('span', 'nome-cam', cam.nome));
+    if (cam.temFoto) { const f = el('button', 'mini', '📷'); f.type = 'button'; f.title = 'Tirar foto e anexar à ocorrência'; f.onclick = () => enviar(o, 'fotos', { camera: i }).then((ok) => ok && toast('Foto anexada')); barra.append(f); }
+    const ab = el('button', 'mini', 'Abrir'); ab.type = 'button'; ab.title = 'Abrir o visualizador da câmera em outra janela'; ab.onclick = () => abrirCamera(cam, i); barra.append(ab);
+    t.append(barra); grade.append(t);
+  });
+  tela.cams.replaceChildren(h, grade);
+  if (imgs.length) tela.timerCam = setInterval(() => { if (!document.hidden) for (const img of imgs) img.src = img.dataset.base + '?t=' + Date.now(); }, 2000);
+}
+
+function desenharApoio(o, meu) {
+  const h = el('h3', '', 'Veículo de apoio');
+  const corpo = [];
+  if (o.apoio) {
+    const s = el('div', 'apoio-status ' + o.apoio.situacao);
+    s.append(el('strong', '', o.apoio.viatura), el('span', '', o.apoio.rotulo + ' desde ' + hora(o.apoio.em)));
+    corpo.push(s);
+  } else corpo.push(el('p', 'mute', 'Nenhum apoio acionado.'));
+  if (meu) { const b = el('button', 'mini', o.apoio ? 'Atualizar apoio' : 'Acionar apoio'); b.type = 'button'; b.onclick = () => abrirApoio(o); corpo.push(b); }
+  tela.apoio.replaceChildren(h, ...corpo);
+}
+
+function desenharLinha(o) {
+  const itens = [
+    ...o.eventos.map((e) => ({ em: e.em, txt: e.codigo + ' ' + e.descricao + (e.zona ? ' · zona ' + e.zona : ''), cls: 'ev' })),
+    ...o.acoes.map((a) => ({ em: a.em, txt: (a.operador ? a.operador + ': ' : '') + a.descricao, cls: 'ac' })),
+  ].sort((a, b) => b.em.localeCompare(a.em)).slice(0, 40);
+  const ul = el('ul', 'linha-tempo');
+  for (const i of itens) { const li = el('li', i.cls); li.append(el('span', 'hora', hora(i.em)), el('span', '', i.txt)); ul.append(li); }
+  tela.linha.replaceChildren(el('h3', '', 'Eventos do atendimento'), ul);
+}
+
+// ---------- Apoio e agendar ----------
+let apoioDe = null;
+function abrirApoio(o) {
+  apoioDe = o; $('apoio-resumo').textContent = rotuloConta(o) + ' · ' + o.resumo; $('apoio-erro').textContent = '';
+  $('apoio-viatura').value = o.apoio ? o.apoio.viatura : '';
+  const usadas = store.get('viaturas') ? store.get('viaturas').split('|') : [];
+  $('viaturas').replaceChildren(...usadas.map((v) => new Option(v)));
+  $('apoio-botoes').replaceChildren(...APOIO.map(([k, rot]) => {
+    const b = el('button', k === 'cancelado' ? 'perigo' : k === 'liberado' ? 'principal' : '', rot); b.type = 'button';
+    if (o.apoio && o.apoio.situacao === k) b.classList.add('atual');
+    b.onclick = async () => {
+      const v = $('apoio-viatura').value.trim();
+      try {
+        await api('/api/ocorrencias/' + apoioDe.id + '/apoio', { method: 'POST', body: JSON.stringify({ situacao: k, viatura: v }) });
+        if (v) store.set('viaturas', [v, ...usadas.filter((x) => x !== v)].slice(0, 12).join('|'));
+        $('dlg-apoio').close(); toast('Apoio: ' + rot.toLowerCase()); load();
+      } catch (e) { $('apoio-erro').textContent = e.message; }
+    };
+    return b;
+  }));
+  $('dlg-apoio').showModal(); $('apoio-viatura').focus();
+}
+$('apoio-fechar').onclick = () => $('dlg-apoio').close();
+$('form-apoio').onsubmit = (ev) => ev.preventDefault();
+
+let agendarDe = null;
+function abrirAgendar(o) {
+  agendarDe = o; $('agendar-erro').textContent = '';
+  const d = new Date(Date.now() + 60 * 60000); d.setSeconds(0, 0);
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  $('agendar-em').value = local; $('agendar-em').min = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  $('dlg-agendar').showModal();
+}
+$('agendar-cancelar').onclick = () => $('dlg-agendar').close();
+$('form-agendar').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const ate = new Date($('agendar-em').value);
+  if (Number.isNaN(ate.getTime()) || ate <= new Date()) { $('agendar-erro').textContent = 'Escolha um horário no futuro'; return; }
+  try {
+    await api('/api/ocorrencias/' + agendarDe.id + '/adiar', { method: 'POST', body: JSON.stringify({ ate: ate.toISOString() }) });
+    $('dlg-agendar').close(); toast('Agendada para ' + dataHora(ate.toISOString())); load();
+  } catch (e) { $('agendar-erro').textContent = e.message; }
+};
+
+// ---------- Fila ----------
 const LIMITE_SILENCIO_MIN = 10;
 function mostrarFeed(st) {
   const f = $('feed');
@@ -173,6 +484,33 @@ function mostrarFeed(st) {
     : (ruim ? '⚠ Nenhum evento desde que o sistema iniciou (' + min + ' min)' : 'Aguardando eventos…');
 }
 
+let novas = [];
+function desenhar() {
+  const lista = ultimaLista;
+  // Sem escolha (ou a escolhida saiu da fila): abre a primeira que está com você.
+  if (!selecionada()) {
+    const prox = lista.filter(minha).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm))[0];
+    selId = prox ? prox.id : null;
+  }
+  for (const id of SITUACOES) {
+    const col = lista.filter((o) => o.situacao === id).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));
+    $('n-' + id).textContent = col.length; $('l-' + id + '-n').textContent = col.length;
+    const destino = $(modo === 'lado' ? 'l-' + id : 'c-' + id);
+    destino.replaceChildren(...(col.length ? col.map((o) => item(o, novas.includes(o.id), modo === 'colunas')) : [el('div', 'vazio', 'Nada por aqui')]));
+  }
+  if (modo !== 'lado') return;
+  const o = selecionada();
+  if (!o) {
+    if (tela) { clearInterval(tela.timerCam); tela = null; }
+    const v = el('div', 'vazio grande');
+    v.append(el('strong', '', disponivel ? 'Nenhuma ocorrência com você agora' : 'Você está indisponível'),
+      el('span', 'mute', disponivel ? 'As ocorrências da fila chegam aqui sozinhas, a mais urgente primeiro. Clique em uma da lateral para ver os detalhes.' : 'Clique em "Ficar disponível" para receber ocorrências da fila.'));
+    $('area').replaceChildren(v);
+    return;
+  }
+  desenharOcorrencia(o);
+}
+
 async function load() {
   try {
     const [lista, st, voce] = await Promise.all([api('/api/ocorrencias'), api('/api/estado'), api('/api/eu')]);
@@ -180,17 +518,12 @@ async function load() {
     if (eu.nome && voce.disponivel !== disponivel) { disponivel = voce.disponivel; mostrarEstado(); }
     ultimaLista = lista; aviso('');
     const ids = new Set(lista.map((o) => o.id));
-    const novas = conhecidas ? lista.filter((o) => !conhecidas.has(o.id)) : [];
+    const chegaram = conhecidas ? lista.filter((o) => !conhecidas.has(o.id)) : [];
+    novas = chegaram.map((o) => o.id);
     conhecidas = ids;
-    if (novas.some((o) => o.prioridade <= 2 && !o.alarme) || (novas.length && disponivel && novas.some((o) => o.operador === eu.nome && !o.alarme))) bip();
+    if (chegaram.some((o) => o.prioridade <= 2 && !o.alarme) || (chegaram.length && disponivel && chegaram.some((o) => o.operador === eu.nome && !o.alarme))) bip();
     atualizarAlarme(lista, eu, cienteDoDisparo, disponivel || !eu.nome ? null : () => $('disp').click());
-    const foco = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.ocorrencia : undefined;
-    for (const id of ['aguardando', 'pendente', 'em_atendimento']) {
-      const col = lista.filter((o) => o.situacao === id).sort((a, b) => a.prioridade - b.prioridade || a.abertaEm.localeCompare(b.abertaEm));
-      $('n-' + id).textContent = col.length;
-      $(id).replaceChildren(...(col.length ? col.map((o) => card(o, novas.includes(o))) : [el('div', 'vazio', 'Nada por aqui')]));
-    }
-    if (foco) { const campo = document.querySelector('input[data-ocorrencia="' + foco + '"]'); if (campo) { campo.focus(); campo.setSelectionRange(campo.value.length, campo.value.length); } }
+    desenhar();
   } catch (e) { aviso(e.message); }
 }
 
@@ -206,19 +539,11 @@ $('disp').onclick = async () => {
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   try { await api('/api/operadores', { method: 'POST', body: JSON.stringify({ disponivel: !disponivel }) }); disponivel = !disponivel; mostrarEstado(); load(); } catch (e) { aviso(e.message); }
 };
-$('cancelar').onclick = () => $('dlg-concluir').close();
-$('form-concluir').onsubmit = async (ev) => {
-  ev.preventDefault();
-  try {
-    await api('/api/ocorrencias/' + concluindo.id + '/concluir', { method: 'POST', body: JSON.stringify({ motivo: $('motivo').value, conclusao: $('conclusao').value }) });
-    $('dlg-concluir').close(); toast('Ocorrência concluída'); load();
-  } catch (e) { $('dlg-erro').textContent = e.message; }
-};
 
 (async () => {
   eu = await iniciarTopo('fila');
   if (!eu.nome) { $('disp').disabled = true; $('estado').textContent = 'Acesso de serviço'; }
-  disponivel = eu.disponivel; mostrarEstado();
+  disponivel = eu.disponivel; mostrarEstado(); trocarModo(modo);
   setInterval(load, 2000); load();
 })();
 </script>
